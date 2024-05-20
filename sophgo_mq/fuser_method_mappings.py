@@ -428,7 +428,7 @@ fuse_custom_config_dict = {
     },
     "additional_fusion_pattern": {
         (torch.nn.BatchNorm1d, torch.nn.Linear):
-        ConvBNReLUFusion,
+        ModuleReLUFusion,
         (torch.nn.BatchNorm2d, torch.nn.ConvTranspose2d):
         ConvBNReLUFusion,
         (torch.nn.ReLU, torch.nn.ConvTranspose2d):

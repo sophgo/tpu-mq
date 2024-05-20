@@ -47,6 +47,8 @@ class ObserverBase(_ObserverBase):
     @torch.jit.export
     def calculate_qparams(self) -> Tuple[torch.Tensor, torch.Tensor]:
         r"""Calculates the quantization parameters."""
+        if self.min_val >= self.max_val:
+            self.max_val = self.min_val
         scale, zero_point = self._calculate_qparams(self.min_val, self.max_val)
         scale.data = sync_tensor(scale).data
         zero_point.data = sync_tensor(zero_point).data

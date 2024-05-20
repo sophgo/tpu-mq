@@ -37,7 +37,20 @@ class LearnableFakeQuantize(QuantizeBase):
                    self.zero_point if self.ch_axis == -1 else 'List')
 
     def forward(self, X):
+        '''
+        if type(X)==int:
+            #import pdb; pdb.set_trace()
+            print(type(X))
+            self.flag=1
+            X=torch.tensor(X).to(torch.float32)
+        '''
         x_ori = X
+        '''
+        if isinstance(x_ori, torch.Size):
+            return x_ori
+        if x_ori.dtype == torch.int64:
+            x_ori = x_ori.to(torch.float32)
+        '''
         # Learnable fake quantize have to zero_point.float() to make it learnable.
         if self.observer_enabled[0] == 1:# or self.only_enable_observer:
             self.activation_post_process(X.detach())

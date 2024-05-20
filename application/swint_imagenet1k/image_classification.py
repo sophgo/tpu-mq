@@ -5,6 +5,7 @@ import torch
 import random
 import q_model
 import logging
+import datetime
 import argparse
 import datasets
 import transformers
@@ -69,7 +70,8 @@ def set_seed(seed):
 
 def collate_fn(examples):
     pixel_values = torch.stack([example["pixel_values"] for example in examples])
-    labels = torch.tensor([example["labels"] for example in examples])
+    #labels = torch.tensor([example["labels"] for example in examples])
+    labels = torch.tensor([example["label"] for example in examples])
     return {"pixel_values": pixel_values, "labels": labels}
 
 
@@ -78,8 +80,9 @@ def quantize_model(model, config_quant):
     input_names = ['pixel_values']
     prepare_custom_config_dict = {
         'quant_dict': {
-            'chip': 'Academic',
-            'strategy': 'Transformer',
+
+            'chip': 'BM1688',
+            'strategy': 'CNN',
             'quantmode': 'weight_activation'
         },
         'extra_qconfig_dict': {
@@ -99,20 +102,8 @@ def quantize_model(model, config_quant):
                 'per_channel': True if config_quant.a_qconfig.ch_axis == 0 else False,
                 'pot_scale': False,
             },
-            'int4_op': [
-                'permute_3_post_act_fake_quantizer', 'transpose_1_post_act_fake_quantizer',
-                'permute_11_post_act_fake_quantizer','transpose_2_post_act_fake_quantizer',
-                'permute_18_post_act_fake_quantizer','transpose_3_post_act_fake_quantizer',
-                'permute_26_post_act_fake_quantizer','transpose_4_post_act_fake_quantizer',
-                'permute_33_post_act_fake_quantizer','transpose_5_post_act_fake_quantizer',
-                'permute_41_post_act_fake_quantizer','transpose_6_post_act_fake_quantizer',
-                'permute_48_post_act_fake_quantizer','transpose_7_post_act_fake_quantizer',
-                'permute_56_post_act_fake_quantizer','transpose_8_post_act_fake_quantizer',
-                'permute_63_post_act_fake_quantizer','transpose_9_post_act_fake_quantizer',
-                'permute_71_post_act_fake_quantizer','transpose_10_post_act_fake_quantizer',
-                'permute_78_post_act_fake_quantizer','transpose_11_post_act_fake_quantizer',
-                'permute_85_post_act_fake_quantizer','transpose_12_post_act_fake_quantizer',
-            ],
+
+
         },
         'concrete_args': get_concrete_args(model, input_names),
         'preserve_attr': {'': ['config', 'num_labels']},
@@ -163,14 +154,21 @@ def main(config_path):
     set_seed(config.train.seed)
     training_args = image_classification_utils.make_huggingface_training_args(config.train, config.progress)
     set_logger(config.progress)
-    raw_datasets = image_classification_utils.load_image_dataset(config.data, config.model)
-    # Prepare label mappings.
-    # We'll include these in the model's config to get human readable labels in the Inference API.
-    labels = raw_datasets["validation"].features["labels"].names
-    label2id, id2label = dict(), dict()
-    for i, label in enumerate(labels):
-        label2id[label] = str(i)
-        id2label[str(i)] = label
+
+    LOAD_DATA=True
+    if LOAD_DATA:
+        raw_datasets = image_classification_utils.load_image_dataset(config.data, config.model)
+        # Prepare label mappings.
+        # We'll include these in the model's config to get human readable labels in the Inference API.
+        #labels = raw_datasets["validation"].features["labels"].names
+        labels = raw_datasets["validation"].features["label"].names
+        label2id, id2label = dict(), dict()
+        for i, label in enumerate(labels):
+            label2id[label] = str(i)
+            id2label[str(i)] = label
+    else:
+        label2id, id2label = dict(), dict()
+        labels=[]
 
     # Load the accuracy metric from the datasets package
     metric = load_metric("./accuracy.py")
@@ -185,6 +183,8 @@ def main(config_path):
 
     if hasattr(config, 'quant'):
         model = quantize_model(model, config.quant)
+    if not LOAD_DATA:
+        sys.exit(1)
     # Define torchvision transforms to be applied to each image.
     normalize = Normalize(mean=feature_extractor.image_mean, std=feature_extractor.image_std)
     _train_transforms = Compose(
@@ -254,6 +254,7 @@ def main(config_path):
     
     if hasattr(config, 'quant'):
         disable_all(trainer.model.cuda())
+    '''
     metrics_ori = trainer.evaluate()
     trainer.log_metrics("eval", metrics_ori)
     trainer.save_metrics("eval", metrics_ori)
@@ -274,19 +275,25 @@ def main(config_path):
     if training_args.do_eval:
         if hasattr(config, 'quant'):
             enable_quantization(trainer.model)
+
+        trainer.model.cuda()
         metrics_quant = trainer.evaluate()
         trainer.log_metrics("eval", metrics_quant)
         trainer.save_metrics("eval", metrics_quant)
+    '''
+    
 
     # model_kind, model_onnx_config = FeaturesManager.check_supported_model_or_raise(model, feature='default')
-    # onnx_config = model_onnx_config(model.config)
-    # export_inputs = {
-    #     'pixel_values': torch.tensor(raw_datasets["validation"][0]['pixel_values']).unsqueeze(0).cuda()
-    # }
-    # convert_deploy(model.eval(),
-    #                net_type="Transformer",
-    #                dummy_input=(export_inputs,),
-    #                model_name="ptq_swin_transformer")
+    #onnx_config = model_onnx_config(model.config)
+    export_inputs = {
+        'pixel_values': torch.tensor(raw_datasets["validation"][0]['pixel_values']).unsqueeze(0).cpu()
+    }
+    print("NOW CONVERT DEPLOY")
+    convert_deploy(model.eval(),
+
+                    net_type="CNN",
+                    dummy_input=(export_inputs,),
+                    model_name="ptq_swin_transformer")
 
 
 if __name__ == '__main__':

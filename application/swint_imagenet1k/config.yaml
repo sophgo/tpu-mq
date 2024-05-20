@@ -12,12 +12,15 @@ quant:
         symmetric: True #False
         ch_axis: -1 # perchannel 0 perlayer -1
     calibrate: 1024
-    backend: academic
+
 data:
-    dataset_name: null
+    #dataset_name: null
+    dataset_name: mnist
     dataset_config_name: null
-    train_dir: /data/imagenet/for_train_val/train  #/root/imagenet/ILSVRC/Data/CLS-LOC/train
-    validation_dir: /data/imagenet/for_train_val/val   #/root/imagenet/ILSVRC/Data/CLS-LOC/val
+    #train_dir: /data/imagenet/for_train_val/train  #/root/imagenet/ILSVRC/Data/CLS-LOC/train
+    #validation_dir: /data/imagenet/for_train_val/val   #/root/imagenet/ILSVRC/Data/CLS-LOC/val
+    train_dir: ./dataset/minist/train  #/root/imagenet/ILSVRC/Data/CLS-LOC/train
+    validation_dir: ./dataset/minist/val   #/root/imagenet/ILSVRC/Data/CLS-LOC/val
     train_val_split: 0.5 #null
     max_train_samples: null
     max_eval_samples: null
@@ -26,11 +29,11 @@ model:
     model_name_or_path: microsoft/swin-tiny-patch4-window7-224 #microsoft/swin-base-patch4-window12-384   #microsoft/swin-tiny-patch4-window7-224 #/root/pretrained-models/vit-base-patch16-224
     model_type: null
     config_name: null
-    cache_dir: null
+    cache_dir: ./model_cache
     model_revision: null
     feature_extractor_name: microsoft/swin-tiny-patch4-window7-224
     use_auth_token: False
-    ignore_mismatched_sizes: False
+    ignore_mismatched_sizes: True
 
 train:
     seed: 42
@@ -61,7 +64,7 @@ progress:
     log_level_replica: passive # Logger log level to use on replica nodes.
     logging_dir: null # Tensorboard log dir.
     logging_strategy: epoch # The logging strategy to use. "no"; "steps"; "epoch";
-    logging_steps: null # Log every X updates steps.
+    logging_steps: 100 # Log every X updates steps.
     
     save_strategy: "epoch" # The checkpoint save strategy to use. "no"; "steps"; "epoch";
     save_steps: null # Save checkpoint every X updates steps.

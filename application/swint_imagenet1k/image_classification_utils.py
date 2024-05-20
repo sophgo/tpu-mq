@@ -100,6 +100,7 @@ def load_image_dataset(config_data, config_model):
             cache_dir=config_model.cache_dir,
             # task="image-classification",
             use_auth_token=True if config_model.use_auth_token else None,
+            num_proc=8
         )
     else:
         data_files = {}
@@ -113,6 +114,7 @@ def load_image_dataset(config_data, config_model):
             cache_dir=config_model.cache_dir,
             task="image-classification",
             keep_in_memory=True,
+            num_proc=8
         )
     
     # If we don't have a validation split, split off a percentage of train as validation.

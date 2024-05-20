@@ -5,6 +5,8 @@ import types
 import inspect
 
 import torch
+import operator
+import torch.nn as nn
 from torch.fx import Tracer
 from torch.fx.graph_module import GraphModule
 from torch.quantization.quantize_fx import _swap_ff_with_fxff
@@ -57,12 +59,19 @@ ParamsTable = {
     'BM1688':                 dict(qtype='affine',
                                  w_qscheme=QuantizeScheme(symmetry=True, per_channel=True, pot_scale=False, bit=8),
                                  a_qscheme=QuantizeScheme(symmetry=True, per_channel=False, pot_scale=False, bit=8),
-                                 default_weight_quantize=E4M3FakeQuantize,
+                                 default_weight_quantize=LearnableFakeQuantize,
                                  default_act_quantize=LearnableFakeQuantize,
                                  default_weight_observer=MinMaxObserver,
                                  default_act_observer=EMAMinMaxObserver),    
     'BM1684X':                dict(qtype='affine',
                                  w_qscheme=QuantizeScheme(symmetry=True, per_channel=True, pot_scale=False, bit=8),
+                                 a_qscheme=QuantizeScheme(symmetry=True, per_channel=False, pot_scale=False, bit=8),
+                                 default_weight_quantize=LearnableFakeQuantize,
+                                 default_act_quantize=LearnableFakeQuantize,
+                                 default_weight_observer=MinMaxObserver,
+                                 default_act_observer=EMAMinMaxObserver),
+    'CV183X':                dict(qtype='affine',
+                                 w_qscheme=QuantizeScheme(symmetry=True, per_channel=True, pot_scale=False, bit=8, symmetric_range=True),
                                  a_qscheme=QuantizeScheme(symmetry=True, per_channel=False, pot_scale=False, bit=8),
                                  default_weight_quantize=LearnableFakeQuantize,
                                  default_act_quantize=LearnableFakeQuantize,
@@ -78,7 +87,7 @@ ParamsTable = {
     'Academic':               dict(qtype='affine',
                                  w_qscheme=QuantizeScheme(symmetry=True, per_channel=True, pot_scale=False, bit=8),
                                  a_qscheme=QuantizeScheme(symmetry=True, per_channel=False, pot_scale=False, bit=8),
-                                 default_weight_quantize=E4M3FakeQuantize,
+                                 default_weight_quantize=LearnableFakeQuantize,
                                  default_act_quantize=LearnableFakeQuantize,
                                  default_weight_observer=MinMaxObserver,
                                  default_act_observer=EMAMinMaxObserver)
@@ -88,7 +97,7 @@ ObserverDict = {
     'MinMaxObserver':           MinMaxObserver,                                    # noqa: E241
     'EMAMinMaxObserver':        EMAMinMaxObserver,        # More general choice.   # noqa: E241
     'MinMaxFloorObserver':      MinMaxFloorObserver,      # For Vitis HW           # noqa: E241
-    'PoTModeObserver':          PoTModeObserver,   # For Vitis HW           # noqa: E241
+    'PoTModeObserver':          PoTModeObserver,          # For Vitis HW           # noqa: E241
     'EMAQuantileObserver':      EMAQuantileObserver,      # Quantile observer.     # noqa: E241
     'ClipStdObserver':          ClipStdObserver,          # Usually used for DSQ.  # noqa: E241
     'LSQObserver':              LSQObserver,              # Usually used for LSQ.  # noqa: E241
@@ -98,7 +107,7 @@ ObserverDict = {
 }
 
 FakeQuantizeDict = {
-    'FixedFakeQuantize': FixedFakeQuantize,      # Unlearnable scale/zeropoint  # noqa: E241
+    'FixedFakeQuantize': FixedFakeQuantize,          # Unlearnable scale/zeropoint  # noqa: E241
     'LearnableFakeQuantize': LearnableFakeQuantize,  # Learnable scale/zeropoint    # noqa: E241
     'NNIEFakeQuantize':      NNIEFakeQuantize,       # Quantize function for NNIE   # noqa: E241
     'DoReFaFakeQuantize':    DoReFaFakeQuantize,     # Dorefa                       # noqa: E241
@@ -132,6 +141,71 @@ FakeQuantizeDict_Chip = {
     'Fp16FakeQuantize':      Fp16FakeQuantize,
     'BF16FakeQuantize':      BF16FakeQuantize,
 }
+
+def default_int4_qconfig():
+    w_fakequantize = 'LearnableFakeQuantize'
+    a_fakequantize = 'LearnableFakeQuantize'
+    w_observer = 'MinMaxObserver'
+    a_observer = 'EMAMinMaxObserver'
+    w_qscheme = {
+        'bit': 4,
+        'symmetry': True,
+        'per_channel': False,
+        'pot_scale': False
+    }
+    a_qscheme = {
+        'bit': 4,
+        'symmetry': True,
+        'per_channel': False,
+        'pot_scale': False
+    }
+    int4_qconfig = createQConfig(w_fakequantize=w_fakequantize,
+                                    a_fakequantize=a_fakequantize,
+                                    w_qscheme=w_qscheme, a_qscheme=a_qscheme)
+    return int4_qconfig
+
+def default_int8_qconfig():
+    w_fakequantize = 'LearnableFakeQuantize'
+    a_fakequantize = 'LearnableFakeQuantize'
+    w_observer = 'MinMaxObserver'
+    a_observer = 'EMAMinMaxObserver'
+    w_qscheme = {
+        'bit': 8,
+        'symmetry': True,
+        'per_channel': False,
+        'pot_scale': False
+    }
+    a_qscheme = {
+        'bit': 8,
+        'symmetry': True,
+        'per_channel': False,
+        'pot_scale': False
+    }
+    int8_qconfig = createQConfig(w_fakequantize=w_fakequantize,
+                                    a_fakequantize=a_fakequantize,
+                                    w_qscheme=w_qscheme, a_qscheme=a_qscheme)
+    return int8_qconfig
+
+def default_f16_qconfig():
+    w_fakequantize = 'Fp16FakeQuantize'
+    a_fakequantize = 'Fp16FakeQuantize'
+    w_observer = 'MinMaxObserver'
+    a_observer = 'EMAMinMaxObserver'
+    w_qscheme = {
+        'bit': 16,
+        'symmetry': True,
+        'per_channel': False,
+        'pot_scale': False
+    }
+    a_qscheme = {
+        'bit': 16,
+        'symmetry': True,
+        'per_channel': False,
+        'pot_scale': False
+    }
+    f16_qconfig = createQConfig(w_fakequantize=w_fakequantize, a_fakequantize=a_fakequantize, 
+                                w_qscheme=w_qscheme, a_qscheme=a_qscheme)
+    return f16_qconfig
 
 def get_qconfig_by_platform(quant_dict:Dict,extra_qparams: Dict):
     """
@@ -170,6 +244,8 @@ def get_qconfig_by_platform(quant_dict:Dict,extra_qparams: Dict):
         chip_params,w_observer,a_observer,w_fakequantize,a_fakequantize=chipparams(chip,extra_qparams,FakeQuantizeDict_Chip)
     elif chip=="BM1684X":
         chip_params,w_observer,a_observer,w_fakequantize,a_fakequantize=chipparams(chip,extra_qparams,FakeQuantizeDict_Chip)
+    elif chip=="CV183X":
+        chip_params,w_observer,a_observer,w_fakequantize,a_fakequantize=chipparams(chip,extra_qparams,FakeQuantizeDict_Chip)
     elif chip=="BM1690":
         chip_params,w_observer,a_observer,w_fakequantize,a_fakequantize=chipparams(chip,extra_qparams,FakeQuantizeDict_Chip)
     elif chip=="Academic":
@@ -202,8 +278,10 @@ def get_qconfig_by_platform(quant_dict:Dict,extra_qparams: Dict):
     # Set extra args for observers.
     w_observer_extra_args = extra_qparams.get('w_observer_extra_args', {})
     a_observer_extra_args = extra_qparams.get('a_observer_extra_args', {})
-    w_qscheme.kwargs.update(w_observer_extra_args)
-    a_qscheme.kwargs.update(a_observer_extra_args)
+    if w_qscheme:
+        w_qscheme.kwargs.update(w_observer_extra_args)
+    if a_qscheme:
+        a_qscheme.kwargs.update(a_observer_extra_args)
     # Get weight / act fake quantize function and params. And bias fake quantizer if needed(Vitis)
     if not w_fakequantize:
         w_fakequantize = chip_params['default_weight_quantize']
@@ -219,21 +297,29 @@ def get_qconfig_by_platform(quant_dict:Dict,extra_qparams: Dict):
 
     # Create qconfig.
     # here, rewrited by with_args
-    w_qconfig = w_fakequantize.with_args(observer=w_observer, **w_fakeq_params, **w_qscheme.to_observer_params())
-    a_qconfig = a_fakequantize.with_args(observer=a_observer, **a_fakeq_params, **a_qscheme.to_observer_params())
+    w_qconfig = None
+    if w_qscheme:
+        w_qconfig = w_fakequantize.with_args(observer=w_observer, **w_fakeq_params, **w_qscheme.to_observer_params())
+    else:
+        if w_fakequantize:
+            w_qconfig = w_fakequantize.with_args(observer=w_observer, **w_fakeq_params)
+    if a_qscheme:
+        a_qconfig = a_fakequantize.with_args(observer=a_observer, **a_fakeq_params, **a_qscheme.to_observer_params())
+    else:
+        a_qconfig = a_fakequantize.with_args(observer=a_observer, **a_fakeq_params)
     assert not(quant_dict["quantmode"]=="weight_only"and quant_dict["strategy"]=="CNN") ,"unsupport this combination"
     if quant_dict["quantmode"]=="weight_activation":
         logger.info('Weight Qconfig:\n    FakeQuantize: {} Params: {}\n'
-                    '    Oberver:      {} Params: {}'.format(w_fakequantize.__name__, w_fakeq_params,
-                                                            w_observer.__name__, str(w_qscheme)))
+                    '    Oberver:      {} Params: {}'.format(w_fakequantize.__name__ if w_fakequantize else "None", w_fakeq_params,
+                                                            w_observer.__name__ if w_observer else "None", str(w_qscheme)))
         logger.info('Activation Qconfig:\n    FakeQuantize: {} Params: {}\n'
                     '    Oberver:      {} Params: {}'.format(a_fakequantize.__name__, a_fakeq_params,
-                                                            a_observer.__name__, str(a_qscheme)))
+                                                            a_observer.__name__ if a_observer else "None", str(a_qscheme)))
         logger.info('Bias will also be quantified')
     elif quant_dict["quantmode"]=="weight_only":
         logger.info('Weight Qconfig:\n    FakeQuantize: {} Params: {}\n'
-                    '    Oberver:      {} Params: {}'.format(w_fakequantize.__name__, w_fakeq_params,
-                                                            w_observer.__name__, str(w_qscheme)))
+                    '    Oberver:      {} Params: {}'.format(w_fakequantize.__name__ if w_fakequantize else "None", w_fakeq_params,
+                                                            w_observer.__name__ if w_observer else "None", str(w_qscheme)))
     else:
         logger.info("The quantmode is currently not supported")
     
@@ -262,7 +348,11 @@ def get_qconfig_by_platform(quant_dict:Dict,extra_qparams: Dict):
     #         qconfig["object_type"].update(object_type)
     #     else:
     #         qconfig["object_type"] = object_type
-            
+    # if chip=="CV183X":
+    #     from sophgo_mq.custom_quantizer.sophgo_tpu_quantizer import SophgoTpuQuantizer
+    #     conv_matmul_types = SophgoTpuQuantizer({},{},{},None)._layers_need_scale_form_input_fake_quantizer
+    #     for type in conv_matmul_types:
+    #         qconfig['object_type'][type]=createQConfig()
     module_name = extra_qparams.get('module_name', None)
     if module_name:
         if "module_name" not in qconfig:
@@ -281,88 +371,34 @@ def get_qconfig_by_platform(quant_dict:Dict,extra_qparams: Dict):
             else:
                 raise ValueError(f'无效的模式: {mode}。模式应该是 "activation" 或 "weight"。')
 
-    # Find INT4 op and set the config:
-    int4_cfg = extra_qparams.get('int4_op', None)
-    if int4_cfg:
+    # Find int4 op and set the config:
+    print('SPECIFIC')
+    specific_net_modules_in = extra_qparams.get('specific_module_to_quant_input', None)
+    print(specific_net_modules_in)
+    if specific_net_modules_in != None:
         if "module_name" not in qconfig:
             qconfig["module_name"] = {}
-        w_fakequantize = 'LearnableFakeQuantize'
-        a_fakequantize = 'LearnableFakeQuantize'
-        w_observer = 'MinMaxObserver'
-        a_observer = 'EMAMinMaxObserver'
-        w_qscheme = {
-            'bit': 4,
-            'symmetry': True,
-            'per_channel': False,
-            'pot_scale': False
-        }
-        a_qscheme = {
-            'bit': 4,
-            'symmetry': True,
-            'per_channel': False,
-            'pot_scale': False
-        }
-        int4_qconfig = createQConfig(w_fakequantize=w_fakequantize,
-                                        a_fakequantize=a_fakequantize,
-                                        w_qscheme=w_qscheme, a_qscheme=a_qscheme)
-        for name in int4_cfg:
-            print('insert INT4 FakeQuantize::', name)
-            qconfig['module_name'][name] = int4_qconfig
+        for name in specific_net_modules_in:
+            print('insert specific net module FakeQuantize::', name)
+            qconfig['module_name'][name] = default_int4_qconfig()
 
     # Find INT8 op and set the config:
     int8_cfg = extra_qparams.get('int8_op', None)
     if int8_cfg:
         if "module_name" not in qconfig:
             qconfig["module_name"] = {}
-        w_fakequantize = 'LearnableFakeQuantize'
-        a_fakequantize = 'LearnableFakeQuantize'
-        w_observer = 'MinMaxObserver'
-        a_observer = 'EMAMinMaxObserver'
-        w_qscheme = {
-            'bit': 8,
-            'symmetry': True,
-            'per_channel': False,
-            'pot_scale': False
-        }
-        a_qscheme = {
-            'bit': 8,
-            'symmetry': True,
-            'per_channel': False,
-            'pot_scale': False
-        }
-        int8_qconfig = createQConfig(w_fakequantize=w_fakequantize,
-                                        a_fakequantize=a_fakequantize,
-                                        w_qscheme=w_qscheme, a_qscheme=a_qscheme)
         for name in int8_cfg:
             print('insert INT8 FakeQuantize::', name)
-            qconfig['module_name'][name] = int8_qconfig
+            qconfig['module_name'][name] = default_int8_qconfig()
 
     # Find F16 op and set the config
     f16_cfg = extra_qparams.get('f16_op', None)
     if f16_cfg:
         if "module_name" not in qconfig:
             qconfig["module_name"] = {}
-        w_fakequantize = 'Fp16FakeQuantize'
-        a_fakequantize = 'Fp16FakeQuantize'
-        w_observer = 'MinMaxObserver'
-        a_observer = 'EMAMinMaxObserver'
-        w_qscheme = {
-            'bit': 16,
-            'symmetry': True,
-            'per_channel': False,
-            'pot_scale': False
-        }
-        a_qscheme = {
-            'bit': 16,
-            'symmetry': True,
-            'per_channel': False,
-            'pot_scale': False
-        }    
-        f16_qconfig = createQConfig(w_fakequantize=w_fakequantize, a_fakequantize=a_fakequantize, 
-                                    w_qscheme=w_qscheme, a_qscheme=a_qscheme)    
         for name in f16_cfg:
             print('insert F16 FakeQuantize::', name)
-            qconfig["module_name"][name] = f16_qconfig
+            qconfig["module_name"][name] = default_f16_qconfig()
     return qconfig
 
 def chipparams(chip,extra_qparams,FakeQuantize):
@@ -388,6 +424,7 @@ def chipparams(chip,extra_qparams,FakeQuantize):
         a_fakequantize = FakeQuantize[a_fakequantize]
     chip_params = ParamsTable[chip]
     return chip_params,w_observer,a_observer,w_fakequantize,a_fakequantize
+
 def createQConfigForSophgo_activation(bit_num = 4, a_fakequantize = 'LearnableFakeQuantize', a_observer = 'MinMaxObserver', a_fakeq_params = {}, a_observer_extra_args = {}):
     a_observer = ObserverDict[a_observer]
     a_fakequantize = FakeQuantizeDict[a_fakequantize]
@@ -395,10 +432,11 @@ def createQConfigForSophgo_activation(bit_num = 4, a_fakequantize = 'LearnableFa
     a_qscheme.kwargs.update(a_observer_extra_args)
     a_qconfig = a_fakequantize.with_args(observer=a_observer, **a_fakeq_params, **a_qscheme.to_observer_params())
     return QConfig(activation=a_qconfig, weight=None)
+
 def createQConfigForSophgo_weight(bit_num = 4, w_fakequantize = 'FixedFakeQuantize', w_observer = 'MinMaxObserver', w_fakeq_params = {}, w_observer_extra_args = {}):
     w_observer = ObserverDict[w_observer]
     w_fakequantize = FakeQuantizeDict[w_fakequantize]
-    w_qscheme = QuantizeScheme(symmetry=True, per_channel=False, pot_scale=False, bit=bit_num) #Sophgo_TPU use sym per-layer
+    w_qscheme = QuantizeScheme(symmetry=True, per_channel=False, pot_scale=False, bit=bit_num, symmetric_range=True) #Sophgo_TPU use sym per-layer
     w_qscheme.kwargs.update(w_observer_extra_args)
     w_qconfig = w_fakequantize.with_args(observer=w_observer, **w_fakeq_params, **w_qscheme.to_observer_params())
     return QConfig(activation=torch.nn.Identity, weight=w_qconfig) #activation use global quant conifg
@@ -411,7 +449,7 @@ def createQConfig(w_fakequantize = 'LearnableFakeQuantize', a_fakequantize = 'Le
     if w_qscheme is not None:
         w_qscheme = QuantizeScheme(**w_qscheme)
     else:
-        w_qscheme = QuantizeScheme(symmetry=True, per_channel=True, pot_scale=False, bit=8)
+        w_qscheme = QuantizeScheme(symmetry=True, per_channel=True, pot_scale=False, bit=8, symmetric_range=True)
 
     w_qscheme.kwargs.update(w_observer_extra_args)
     w_qconfig = w_fakequantize.with_args(observer=w_observer, **w_fakeq_params, **w_qscheme.to_observer_params())
@@ -507,6 +545,211 @@ def prepare_constant_dict(graph: torch.fx.Graph, model: torch.nn.Module):
         if node.op == 'get_attr':
             constant_dict[node.target] = _get_attrs(model, node.target)
     return constant_dict
+"""
+def print_modules(model: torch.nn.Module, prespaces):
+    if type(model)!=torch.nn.modules.linear.Identity:
+        pre=' '*prespaces
+        print(f'{pre}type {type(model)}')
+        for m in model.children():
+            print_modules(m,prespaces+6)
+    else:
+        return
+
+def fuse_linear_add(linear, add):
+    fused_linear = nn.Linear(linear.in_features, linear.out_features)
+    fused_linear.weight = nn.Parameter(linear.weight)
+    fused_linear.bias = nn.Parameter(linear.bias + add.bias)
+    return fused_linear
+
+def merge_add_to_linear(model: torch.nn.Module):
+    print('Print the model')
+    print_modules(model,0)
+    print('Loop the module >>>>>>>>>>>>>>>')
+    '''
+    for name, module in model.named_modules():
+        print(f'Loop : {name}')
+        users_of_target_module = []
+        for name_, module_ in model.named_modules():
+            for child_name_, child_ in module.named_children():
+                if child_ is module:
+                    users_of_target_module.append(module)
+        i=0
+        for user in users_of_target_module:
+            print(f'    -> user {i} {user.name}')
+            i+=1
+    '''
+    for name, module in model.named_children():
+        if isinstance(module, nn.Linear): # and isinstance(model.add, nn.Parameter):
+            print('LINEAR')
+            print(model)
+            print("FUSE LINEAR ADD")
+            fused_linear = fuse_linear_add(module, model.add)
+            setattr(model, name, fused_linear)
+            delattr(model, 'add')
+        else:
+            merge_add_to_linear(module)
+
+def merge_add_to_matmul(graph: torch.fx.Graph):
+    print('merge add to matmul')
+    for node in graph.nodes:
+        if node.op == 'call_function':
+            if node.target in [torch.add, operator.add]:
+                print(f'{node.op}')
+                for arg in node.args:
+                    print(f'{node.op} input {arg}')
+                inputs = node.args
+                '''
+                print(inputs)
+                for i in inputs:
+                    print(f'input {i} type {i['type']} shape {i['shape']}')
+                '''
+                if isinstance(inputs[1], tuple):
+                    print(f"The second input of {node} is a weight: {inputs[1]} {type(inputs[0])} {type(inputs[1])}")
+                else:
+                    print(f"The second input of {node} add is not a weight {inputs[1]} {type(inputs[0])} {type(inputs[1])}")
+    #graph.lint()
+"""
+def find_add_after_qkv(graph: torch.fx.Graph):
+    print('find QKV Add')
+    add_names = []
+    for node in graph.nodes:
+        if node.op == 'call_function' and node.target in [torch.add, operator.add]:
+            add_param1 = node.args[1]
+            if type(add_param1) != tuple:
+                continue
+            add_arg0 = node.args[0]
+            if add_arg0.op == 'call_function' and hasattr(add_arg0.target, '__name__') and add_arg0.target.__name__ == 'getitem':
+                arg0 = add_arg0.args[0]
+                if arg0.op == 'call_method' and arg0.target == 'size':
+                    arg0_1 = arg0.args[0]
+                    if arg0_1.op == 'call_module' and arg0_1.target.startswith('swin.encoder') and \
+                        (arg0_1.target.endswith('query') or arg0_1.target.endswith('value') or arg0_1.target.endswith('key')):
+                        #print(f'found add after qkv {node.name} {arg0_1.name} {arg0_1.target}')
+                        add_names.append(node.name)
+    return add_names
+
+def find_qkv_matmul(graph: torch.fx.Graph):
+    mm_names = []
+    for node in graph.nodes:
+        if node.op == 'call_module' and node.target.startswith('swin.encoder') and \
+            (node.target.endswith('query') or node.target.endswith('value') or node.target.endswith('key')):
+            mm_names.append(node.name)
+    return mm_names
+
+def find_exclude_nodes(graph: torch.fx.Graph):
+    mod_nodes = []
+    func_nodes = []
+    for node in graph.nodes:
+        print(f'FIND Exclude checking size {node.name} type {type(node)} {node.op} {node.target}')
+        if (node.op == 'call_function' or node.op == 'call_method') and node.target == 'size':
+            print(f'    FIND Exclude checking size {node.name} A')
+            func_nodes.append(node.name)
+        else:
+            continue
+        for u in node.users:
+            if type(u) == torch.fx.node.Node:
+                print(f'    FIND Exclude checking size user {u.name} A')
+                if u.op == 'call_function' or u.op == 'call_method':
+                    func_nodes.append(u.name)
+                elif u.op == 'call_module':
+                    mod_nodes.append(u.name)
+    for node in graph.nodes:
+        print(f'FIND Exclude checking mod {node.name}')
+        if node.op == 'call_module'and node.target == operator.mod:
+            mod_nodes.append(node.name)
+        elif (node.op == 'call_function' or node.op == 'call_method') and node.target == operator.mod:
+            func_nodes.append(node.name)
+        else:
+            continue
+        for pre_node in node.all_input_nodes:
+            if isinstance(pre_node, tuple) or isinstance(pre_node, list):
+                continue
+            elif type(pre_node) == torch.fx.node.Node:
+                print(f'    FIND Exclude checking mod {node.name} A')
+                if pre_node.op == 'call_module':
+                    mod_nodes.append(pre_node.name)
+                if pre_node.op == 'call_function' or pre_node.op == 'call_method':
+                    func_nodes.append(pre_node.name)
+    for node in graph.nodes:
+        print(f'FIND Exclude checking getitem {node.name}')      
+        if node.op == 'call_function' and hasattr(node.target, '__name__') and node.target.__name__ == 'getitem':
+            print(f'  FIND Exclude checking getitem {node.name} {node.args})')  
+            if type(node.args[0]) == tuple or type(node.args[0]) == list:
+                print(f'FIND Exclude checking getitem {node.name} A')
+                func_nodes.append(node.name)
+            elif type(node.args[0] == torch.fx.node.Node):
+                if (node.args[0].op == 'call_function' or node.args[0].op == 'call_method') and node.args[0].target == 'size':
+                    print(f'FIND Exclude checking getitem {node.args[0].name} A')
+                    func_nodes.append(node.args[0].name)
+                elif node.args[0].name in func_nodes or node.args[0].name in mod_nodes:
+                    print(f'FIND Exclude checking getitem {node.args[0].name} A')
+                    func_nodes.append(node.args[0].name)
+    for node in graph.nodes:
+        print(f'FIND Exclude checking view {node.name}')        
+        if (node.op == 'call_method' or node.op == 'call_function') and node.target == 'view':
+            for v in node.args[1:]:
+                if type(v) == int:
+                    continue
+                elif type(v) == torch.fx.node.Node:
+                    print(f'    FIND Exclude checking view {v.name} A')        
+                    if v.op == 'call_module':
+                        mod_nodes.append(v.name)
+                    if v.op == 'call_function' or v.op == 'call_method':
+                        func_nodes.append(v.name)
+    for node in graph.nodes:
+        print(f'FIND Exclude checking math {node.name} {node.op} {node.target}')
+        if (node.op == 'call_method' or node.op == 'call_function') and hasattr(node.target, '__name__') and node.target.__name__ in ['add', 'mul', 'sub', 'floordiv', 'truediv']:
+            print(f'  FIND Exclude checking math {node.name} {node.args} {type(node.args[0])} {type(node.args[1])}')
+            if type(node.args[0]) == int or type(node.args[0]) == tuple:
+                if node.args[1].name in func_nodes or node.args[1].name in mod_nodes:
+                    print(f'    FIND Exclude checking math {node.name} A')
+                    func_nodes.append(node.name)
+            elif type(node.args[1]) == int or type(node.args[1]) == tuple:
+                if node.args[0].name in func_nodes or node.args[0].name in mod_nodes:
+                    print(f'    FIND Exclude checking math {node.name} A')
+                    func_nodes.append(node.name)
+            elif (node.args[0].name in mod_nodes or node.args[0].name in func_nodes) and (node.args[1].name in func_nodes or node.args[1].name in mod_nodes):
+                    print(f'    FIND Exclude checking math {node.name} A')
+                    func_nodes.append(node.name)                
+    for node in graph.nodes:
+        print(f'FIND Exclude checking pad {node.name}')        
+        if node.op == 'call_function' and node.target == nn.functional.pad:
+            args = node.args
+            if isinstance(args[1], tuple) or isinstance(args[1], list):
+                for v in args[1]:
+                    if type(v) == int:
+                        continue
+                    elif type(v) == torch.fx.node.Node:
+                        print(f'    FIND Exclude checking pad {node.name} A')        
+                        if v.op == 'call_module'and v.target == operator.mod:
+                            mod_nodes.append(v.name)
+                        if (v.op == 'call_function' or v.op == 'call_method') and v.target == operator.mod:
+                            func_nodes.append(v.name)
+    '''
+    for node in graph.nodes:
+        print(f'FIND Exclude checking exclude {node.name}')        
+        exclude = True
+        if len(node.args) == 0:
+            continue
+        for arg in node.args:
+            print(f'arg {arg} name {arg.name} type {type(arg)}')
+            if not (type(arg) == int or type(arg) == tuple or type(arg) == list):
+                if type(arg) == torch.fx.node.Node:
+                    if not (arg.name in mod_nodes or arg.name in func_nodes):
+                        exclude = False
+                else:
+                    continue
+            else:
+                continue
+        if exclude:
+            print(f'    FIND Exclude checking exclude {node.name} A')        
+            mod_nodes.append(node.name)
+            func_nodes.append(node.name)
+    '''
+    print(f'Find Exclude nodes of mod and pad')
+    print(mod_nodes)
+    print(func_nodes)
+    return mod_nodes, func_nodes
 
 def prepare_by_platform(
         model: torch.nn.Module,
@@ -531,6 +774,7 @@ def prepare_by_platform(
         }
 
     """
+    
     model_mode = 'Training' if model.training else 'Eval'
 
     # Get Qconfig
@@ -561,6 +805,11 @@ def prepare_by_platform(
         tracer = custom_tracer
     graph = tracer.trace(model, concrete_args)
     print('>>>>>trace graph:',graph)
+    qkv_adds = find_add_after_qkv(graph)
+    qkv_mms = find_qkv_matmul(graph)
+    print(qkv_adds)
+    print(qkv_mms)
+
     name = model.__class__.__name__ if isinstance(model, torch.nn.Module) else model.__name__
     modules = dict(model.named_modules())
     print('>>>>>named_modules:',modules[''])
@@ -569,6 +818,8 @@ def prepare_by_platform(
     modules.update(duplicated_modules)
     modules.update(constant_nodes)
     graph_module = GraphModule(modules, graph, name)
+    print('>>>>>>>>>>>graph module')
+    print(graph_module)
     if input_shape_dict is not None:
         try:
             from torch.fx.passes import shape_prop
@@ -584,10 +835,26 @@ def prepare_by_platform(
     import sophgo_mq.custom_quantizer  # noqa: F401
     extra_quantizer_dict = prepare_custom_config_dict.get('extra_quantizer_dict', {})
     quantizer = DEFAULT_MODEL_QUANTIZER[chip](extra_quantizer_dict, extra_fuse_dict,quant_dict)
+    additional_output_node_name = extra_qconfig_dict.get('specific_module_to_quant_output',None) 
+    if additional_output_node_name != None:
+        if len(quantizer.additional_output_node_name)>0:
+            quantizer.additional_output_node_name.append(additional_output_node_name)
+        else:
+            quantizer.additional_output_node_name = additional_output_node_name
+    exclude_mod_names, exclude_func_names = find_exclude_nodes(graph)
+    quantizer.exclude_module_name.extend(exclude_mod_names)
+    quantizer.exclude_node_name.extend(exclude_func_names)
+    
+    print('ADDITIONAL')
+    print(quantizer.additional_output_node_name)
+
+    '''
     if chip == "Academic":
         prepared = quantizer.prepare_swint(graph_module, qconfig)
     else:
         prepared = quantizer.prepare(graph_module, qconfig)
+    '''
+    prepared = quantizer.prepare(graph_module, qconfig)
     # Restore attr.
     if 'preserve_attr' in prepare_custom_config_dict:
         for submodule_name in prepare_custom_config_dict['preserve_attr']:
@@ -603,4 +870,6 @@ def prepare_by_platform(
                 if inspect.ismethod(_attr):
                     _attr = types.MethodType(getattr(_type, attr_name), cur_module)
                 setattr(cur_module, attr_name, _attr)
+    print('after prepare')
+    print(prepared)
     return prepared
