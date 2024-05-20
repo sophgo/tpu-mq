@@ -5,6 +5,8 @@ import types
 import inspect
 
 import torch
+import operator
+import torch.nn as nn
 from torch.fx import Tracer
 from torch.fx.graph_module import GraphModule
 from torch.quantization.quantize_fx import _swap_ff_with_fxff
@@ -57,7 +59,7 @@ ParamsTable = {
     'BM1688':                 dict(qtype='affine',
                                  w_qscheme=QuantizeScheme(symmetry=True, per_channel=True, pot_scale=False, bit=8),
                                  a_qscheme=QuantizeScheme(symmetry=True, per_channel=False, pot_scale=False, bit=8),
-                                 default_weight_quantize=E4M3FakeQuantize,
+                                 default_weight_quantize=LearnableFakeQuantize,
                                  default_act_quantize=LearnableFakeQuantize,
                                  default_weight_observer=MinMaxObserver,
                                  default_act_observer=EMAMinMaxObserver),    
@@ -78,7 +80,7 @@ ParamsTable = {
     'Academic':               dict(qtype='affine',
                                  w_qscheme=QuantizeScheme(symmetry=True, per_channel=True, pot_scale=False, bit=8),
                                  a_qscheme=QuantizeScheme(symmetry=True, per_channel=False, pot_scale=False, bit=8),
-                                 default_weight_quantize=E4M3FakeQuantize,
+                                 default_weight_quantize=LearnableFakeQuantize,
                                  default_act_quantize=LearnableFakeQuantize,
                                  default_weight_observer=MinMaxObserver,
                                  default_act_observer=EMAMinMaxObserver)
@@ -88,7 +90,7 @@ ObserverDict = {
     'MinMaxObserver':           MinMaxObserver,                                    # noqa: E241
     'EMAMinMaxObserver':        EMAMinMaxObserver,        # More general choice.   # noqa: E241
     'MinMaxFloorObserver':      MinMaxFloorObserver,      # For Vitis HW           # noqa: E241
-    'PoTModeObserver':          PoTModeObserver,   # For Vitis HW           # noqa: E241
+    'PoTModeObserver':          PoTModeObserver,          # For Vitis HW           # noqa: E241
     'EMAQuantileObserver':      EMAQuantileObserver,      # Quantile observer.     # noqa: E241
     'ClipStdObserver':          ClipStdObserver,          # Usually used for DSQ.  # noqa: E241
     'LSQObserver':              LSQObserver,              # Usually used for LSQ.  # noqa: E241
@@ -98,7 +100,7 @@ ObserverDict = {
 }
 
 FakeQuantizeDict = {
-    'FixedFakeQuantize': FixedFakeQuantize,      # Unlearnable scale/zeropoint  # noqa: E241
+    'FixedFakeQuantize': FixedFakeQuantize,          # Unlearnable scale/zeropoint  # noqa: E241
     'LearnableFakeQuantize': LearnableFakeQuantize,  # Learnable scale/zeropoint    # noqa: E241
     'NNIEFakeQuantize':      NNIEFakeQuantize,       # Quantize function for NNIE   # noqa: E241
     'DoReFaFakeQuantize':    DoReFaFakeQuantize,     # Dorefa                       # noqa: E241
@@ -388,6 +390,7 @@ def chipparams(chip,extra_qparams,FakeQuantize):
         a_fakequantize = FakeQuantize[a_fakequantize]
     chip_params = ParamsTable[chip]
     return chip_params,w_observer,a_observer,w_fakequantize,a_fakequantize
+
 def createQConfigForSophgo_activation(bit_num = 4, a_fakequantize = 'LearnableFakeQuantize', a_observer = 'MinMaxObserver', a_fakeq_params = {}, a_observer_extra_args = {}):
     a_observer = ObserverDict[a_observer]
     a_fakequantize = FakeQuantizeDict[a_fakequantize]
@@ -395,6 +398,7 @@ def createQConfigForSophgo_activation(bit_num = 4, a_fakequantize = 'LearnableFa
     a_qscheme.kwargs.update(a_observer_extra_args)
     a_qconfig = a_fakequantize.with_args(observer=a_observer, **a_fakeq_params, **a_qscheme.to_observer_params())
     return QConfig(activation=a_qconfig, weight=None)
+
 def createQConfigForSophgo_weight(bit_num = 4, w_fakequantize = 'FixedFakeQuantize', w_observer = 'MinMaxObserver', w_fakeq_params = {}, w_observer_extra_args = {}):
     w_observer = ObserverDict[w_observer]
     w_fakequantize = FakeQuantizeDict[w_fakequantize]
@@ -507,6 +511,96 @@ def prepare_constant_dict(graph: torch.fx.Graph, model: torch.nn.Module):
         if node.op == 'get_attr':
             constant_dict[node.target] = _get_attrs(model, node.target)
     return constant_dict
+"""
+def print_modules(model: torch.nn.Module, prespaces):
+    if type(model)!=torch.nn.modules.linear.Identity:
+        pre=' '*prespaces
+        print(f'{pre}type {type(model)}')
+        for m in model.children():
+            print_modules(m,prespaces+6)
+    else:
+        return
+
+def fuse_linear_add(linear, add):
+    fused_linear = nn.Linear(linear.in_features, linear.out_features)
+    fused_linear.weight = nn.Parameter(linear.weight)
+    fused_linear.bias = nn.Parameter(linear.bias + add.bias)
+    return fused_linear
+
+def merge_add_to_linear(model: torch.nn.Module):
+    print('Print the model')
+    print_modules(model,0)
+    print('Loop the module >>>>>>>>>>>>>>>')
+    '''
+    for name, module in model.named_modules():
+        print(f'Loop : {name}')
+        users_of_target_module = []
+        for name_, module_ in model.named_modules():
+            for child_name_, child_ in module.named_children():
+                if child_ is module:
+                    users_of_target_module.append(module)
+        i=0
+        for user in users_of_target_module:
+            print(f'    -> user {i} {user.name}')
+            i+=1
+    '''
+    for name, module in model.named_children():
+        if isinstance(module, nn.Linear): # and isinstance(model.add, nn.Parameter):
+            print('LINEAR')
+            print(model)
+            print("FUSE LINEAR ADD")
+            fused_linear = fuse_linear_add(module, model.add)
+            setattr(model, name, fused_linear)
+            delattr(model, 'add')
+        else:
+            merge_add_to_linear(module)
+
+def merge_add_to_matmul(graph: torch.fx.Graph):
+    print('merge add to matmul')
+    for node in graph.nodes:
+        if node.op == 'call_function':
+            if node.target in [torch.add, operator.add]:
+                print(f'{node.op}')
+                for arg in node.args:
+                    print(f'{node.op} input {arg}')
+                inputs = node.args
+                '''
+                print(inputs)
+                for i in inputs:
+                    print(f'input {i} type {i['type']} shape {i['shape']}')
+                '''
+                if isinstance(inputs[1], tuple):
+                    print(f"The second input of {node} is a weight: {inputs[1]} {type(inputs[0])} {type(inputs[1])}")
+                else:
+                    print(f"The second input of {node} add is not a weight {inputs[1]} {type(inputs[0])} {type(inputs[1])}")
+    #graph.lint()
+"""
+def find_add_after_qkv(graph: torch.fx.Graph):
+    print('find QKV Add')
+    add_names = []
+    for node in graph.nodes:
+        if node.op == 'call_function' and node.target in [torch.add, operator.add]:
+            add_param1 = node.args[1]
+            if type(add_param1) != tuple:
+                continue
+            add_arg0 = node.args[0]
+            if add_arg0.op == 'call_function' and hasattr(add_arg0.target, '__name__') and add_arg0.target.__name__ == 'getitem':
+                arg0 = add_arg0.args[0]
+                if arg0.op == 'call_method' and arg0.target == 'size':
+                    arg0_1 = arg0.args[0]
+                    if arg0_1.op == 'call_module' and arg0_1.target.startswith('swin.encoder') and \
+                        (arg0_1.target.endswith('query') or arg0_1.target.endswith('value') or arg0_1.target.endswith('key')):
+                        #print(f'found add after qkv {node.name} {arg0_1.name} {arg0_1.target}')
+                        add_names.append(node.name)
+    return add_names
+
+def find_qkv_matmul(graph: torch.fx.Graph):
+    mm_names = []
+    for node in graph.nodes:
+        if node.op == 'call_module' and node.target.startswith('swin.encoder') and \
+            (node.target.endswith('query') or node.target.endswith('value') or node.target.endswith('key')):
+            mm_names.append(node.name)
+    return mm_names
 
 def prepare_by_platform(
         model: torch.nn.Module,
@@ -531,6 +625,7 @@ def prepare_by_platform(
         }
 
     """
+    
     model_mode = 'Training' if model.training else 'Eval'
 
     # Get Qconfig
@@ -561,6 +656,11 @@ def prepare_by_platform(
         tracer = custom_tracer
     graph = tracer.trace(model, concrete_args)
     print('>>>>>trace graph:',graph)
+    qkv_adds = find_add_after_qkv(graph)
+    qkv_mms = find_qkv_matmul(graph)
+    print(qkv_adds)
+    print(qkv_mms)
+
     name = model.__class__.__name__ if isinstance(model, torch.nn.Module) else model.__name__
     modules = dict(model.named_modules())
     print('>>>>>named_modules:',modules[''])

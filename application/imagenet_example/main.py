@@ -219,6 +219,14 @@ def main_worker(gpu, ngpus_per_node, args):
                         'strategy': 'CNN',
                        },
         }
+        extra_prepare_dict['object_type'] = {
+                                    nn.Linear: {
+                                        'mode': 'weight',
+                                        'bit': '8',
+                                        'wfakequantize': 'LearnableFakeQuantize',
+                                        'wobserver': 'MinMaxObserver',
+                                        }
+                }
         if args.fp8_e4m3:
             extra_prepare_dict["extra_qconfig_dict"] = {
                                     'w_observer': 'MinMaxObserver',
