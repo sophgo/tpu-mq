@@ -32,7 +32,7 @@ jobs:
       run: |
         pwd
         ls
-        docker run -v  "$(pwd):/workspace" sophgo/tpuc_dev:v3.3-cuda bash -c \
+        docker run -v  "$(pwd):/workspace" bernardxu6034/sgmq_base:v1 bash -c \
         "
         pwd
         ls
