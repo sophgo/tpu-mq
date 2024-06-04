@@ -432,9 +432,9 @@ def get_quant_type_from_fakequant_type(model: GraphModule):
 
     return quant_type_dict
 
-def convert_deploy(model: GraphModule, chip, val_loader, net_type='CNN',
+def convert_deploy(model: GraphModule, net_type='CNN',
                    input_shape_dict=None, dummy_input=None, output_path='./',
-                   model_name='sophgo_mq_qmodel', deploy_to_qlinear=False, **extra_kwargs):
+                   model_name='sophgo_mq_qmodel', deploy_to_qlinear=False, deploy=False, chip="BM1690", val_loader=None, **extra_kwargs):
     r"""Convert model to onnx model and quantization params depends on backend.
 
     Args:
@@ -468,7 +468,10 @@ def convert_deploy(model: GraphModule, chip, val_loader, net_type='CNN',
     for convert_function in NET_DEPLOY_FUNCTION[net_type]:
         convert_function(deploy_model, **kwargs)
 
-    if chip != 'academic':
+    if deploy and chip != 'academic':
+        if val_loader == None:
+            print(f'VAL Loader not set for deploy!')
+            return
         mlir_scale = '1,1,1'
         mlir_mean = '0,0,0'
         transforms = val_loader.dataset.transform.transforms

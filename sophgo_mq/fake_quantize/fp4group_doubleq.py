@@ -121,11 +121,11 @@ def fpemu_device_fn(tensor, mode, inplace=True, scale=1.0):
         return quantize_to_integer(tensor, mode.split("_")[0], inplace=inplace)
 
     if tensor.is_cuda : # 如果使用CUDA走这个循环，调用了pytquant中的CUDA函数
-        from FP8_Emulator.pytquant.cuda import fpemu_cuda
+        from sophgo_mq.FP8_Emulator.pytquant.cuda import fpemu_cuda
         X = fpemu_cuda.FPEmuOp.apply(tensor, mode, inplace, scale)
 
     else : # 如果使用CPU走这个循环，调用了pytquant中的CPP函数
-        from FP8_Emulator.pytquant.cpp import fpemu_cpp
+        from sophgo_mq.FP8_Emulator.pytquant.cpp import fpemu_cpp
         X = fpemu_cpp.FPEmuOp.apply(tensor, mode, inplace, scale)
 
     return X

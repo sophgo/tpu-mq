@@ -28,6 +28,7 @@ import torchvision.models as models
 from sophgo_mq.convert_deploy import convert_deploy, convert_onnx, export_onnx_with_fakequant_node
 from sophgo_mq.prepare_by_platform import prepare_by_platform
 from sophgo_mq.utils.state import enable_calibration, enable_quantization, disable_all
+import tpu_mlir
 from tools.model_runner import mlir_inference
 
 model_names = sorted(name for name in models.__dict__
@@ -453,8 +454,8 @@ def main_worker(gpu, ngpus_per_node, args):
             validate(val_loader, module_tmp2, criterion, args)
             del module_tmp2
             gen_test_ref_data(cali_loader, model, args)
-            convert_deploy(model.eval(), args.chip, val_loader, input_shape_dict={'data': [args.deploy_batch_size, 3, 224, 224]},
-                model_name='{}'.format(args.arch), output_path=args.output_path)
+            convert_deploy(model.eval(), input_shape_dict={'data': [args.deploy_batch_size, 3, 224, 224]},
+                model_name='{}'.format(args.arch), output_path=args.output_path, deploy=True, chip=args.chip, val_loader=val_loader)
         exit(0)
 
 
@@ -480,10 +481,10 @@ def main_worker(gpu, ngpus_per_node, args):
     enable_quantization(model)
 
     net_type = 'CNN'
-    mlir_model_path = convert_deploy(model.eval(), args.chip, val_loader, net_type, input_shape_dict=
+    mlir_model_path = convert_deploy(model.eval(), net_type, input_shape_dict=
         {'data': [args.deploy_batch_size, 3, 224, 224]},
         model_name='{}'.format(args.arch),
-        output_path=args.output_path, bf16_mix_prec = args.bf16_mix_prec)
+        output_path=args.output_path, bf16_mix_prec = args.bf16_mix_prec, deploy=True, chip=args.chip, val_loader=val_loader)
     validate_for_chip_model(bmodel_test_loader, mlir_model_path, criterion, args)
 
 def prepare_dataloader(args):
