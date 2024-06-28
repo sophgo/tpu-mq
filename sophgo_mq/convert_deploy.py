@@ -1,6 +1,11 @@
+import io
 import json
 import os.path as osp
 import os
+import pdb
+import copy
+import time
+import subprocess
 import numpy as np
 import torch
 from torch.fx import GraphModule
@@ -43,7 +48,10 @@ from sophgo_mq.fake_quantize import (
 )
 # from utils.mlir_shell import mlir_opt_for_top, mlir_lowering, mlir_to_model, f32_blobs_compare
 # from tools.model_runner import mlir_inference, free_mlir_module
+import tpu_mlir
+from tools.model_transform import model_transform_func
 import torchvision.transforms as TorchTransforms
+from utils.mlir_parser import MlirParser
 
 FP8_FAKEQUANTIZER = [E4M3FakeQuantize, E5M2FakeQuantize]
 FP4_FAKEQUANTIZER = [FP4FakeQuantize, GPTQFP4FakeQuantize, FP4GROUPFakeQuantize, FP4GROUPFakeQuantize1]
@@ -52,11 +60,14 @@ INT_FAKEQUANTIZER = [LearnableFakeQuantize, NNIEFakeQuantize, FixedFakeQuantize,
 
 __all__ = ['convert_deploy']
 
+param_to_idx_dict = {}
+
+model_onnx_mem = None
 @register_deploy_function("CNN")
 def convert_merge_bn(model: GraphModule, **kwargs):
     # print('wlog before convert_merge_bn, model.named_modules:', dict(model.named_modules())[''])
     # print('wlog before convert_merge_bn, model.graph:', model.graph)
-    logger.info("Merge BN for deploy.")
+    # logger.info("Merge BN for deploy.")
     nodes = list(model.graph.nodes)
     modules = dict(model.named_modules())
     for node in nodes:
@@ -69,10 +80,12 @@ def convert_merge_bn(model: GraphModule, **kwargs):
 
 @register_deploy_function("CNN")
 def convert_onnx(model: GraphModule, input_shape_dict, dummy_input, onnx_model_path, **kwargs):
-    pt_file_name = onnx_model_path.split('.')
-    pt_file_name[-1] = 'pt'
+    # pt_file_name = onnx_model_path.split('.')
+    # pt_file_name[-1] = 'pt'
     #torch.save(model, '.'.join(pt_file_name))
-    logger.info("Export to onnx, onnx_model_path:{}".format(onnx_model_path))
+    export_to_mem = 'not_gen_bmodel' in kwargs and kwargs['not_gen_bmodel']
+    if not export_to_mem:
+        logger.info("Export to onnx, onnx_model_path:{}".format(onnx_model_path))
     model = model.cpu()
     output_names = kwargs.get('output_names', [])
     dynamic_axes = kwargs.get('dynamic_axes', {})
@@ -85,10 +98,11 @@ def convert_onnx(model: GraphModule, input_shape_dict, dummy_input, onnx_model_p
     # Per-channel QuantizeLinear and DequantizeLinear is supported since opset 13
     opset_version = 13 if kwargs.get('deploy_to_qlinear', False) else 11
     # opset_version = 18
-    
+
     # open all fake quant node to export
     if isinstance(model, torch.fx.graph_module.GraphModule):
-        print(">>>>> print graphmodule before export", model)
+        if not export_to_mem:
+            print(">>>>> print graphmodule before export", model)
         # print(">>>>> print graph before export")
         # model.graph.print_tabular()
         for name, submodule in model.named_modules():
@@ -100,7 +114,10 @@ def convert_onnx(model: GraphModule, input_shape_dict, dummy_input, onnx_model_p
             class_of_submodule = submodule.__class__
             if class_of_submodule in FP8_FAKEQUANTIZER:
                 quant_mode = "FP8"
+    if export_to_mem:
+        onnx_model_path = io.BytesIO()
 
+    simplified_model = None
     with torch.no_grad():
         try:
             from torch.onnx.utils import ONNXCheckerError
@@ -116,23 +133,36 @@ def convert_onnx(model: GraphModule, input_shape_dict, dummy_input, onnx_model_p
                 pass
         except ImportError:
             ### torch 1.13 and 2.0.1
+            s0 = time.time()
             torch.onnx.export(model, dummy_input, onnx_model_path,
                                 input_names=input_names,
                                 output_names=output_names,
                                 opset_version=opset_version,
                                 do_constant_folding=True,
                                 custom_opsets={'Sophgo_custom' : opset_version})
-            tmp_model = onnx.load(onnx_model_path)
+            print(f'torch.onnx.export time:{time.time() - s0}')
+            if export_to_mem:
+                tmp_model = onnx.load_model_from_string(onnx_model_path.getvalue())
+            else:
+                tmp_model = onnx.load(onnx_model_path)
             simplified_model, check = simplify(tmp_model)
-            onnx.save_model(simplified_model, onnx_model_path)
+            if not export_to_mem:
+                onnx.save_model(simplified_model, onnx_model_path)
 
-    model_onnx = onnx.load(onnx_model_path)
+    if export_to_mem:
+        model_onnx = simplified_model if simplified_model is not None else onnx_model_path
+    else:
+        model_onnx = onnx.load(onnx_model_path)
     onnx.checker.check_model(model_onnx)
     model_onnx = onnx.shape_inference.infer_shapes(model_onnx)
-    os.system(f"rm -f {onnx_model_path}")
-    onnx.save(model_onnx, onnx_model_path)
+    if export_to_mem:
+        global model_onnx_mem
+        model_onnx_mem = model_onnx
+    else:
+        os.system(f"rm -f {onnx_model_path}")
+        onnx.save(model_onnx, onnx_model_path)
 
-     
+
 @register_deploy_function("Transformer")
 def convert_onnx(model: GraphModule, input_shape_dict, dummy_input, onnx_model_path, **kwargs):
     pt_file_name = onnx_model_path.split('.')
@@ -264,8 +294,8 @@ def export_qtable(context_filename, model_name, output_path, quant_mode):
                     f.write("{} {}\n".format(name[:-2], dtype))
                 else:
                     f.write("{} {}\n".format(name, dtype))
-                    
-                    
+
+
 @register_deploy_function("Transformer")
 def deploy_qparams_Academic_NLP(model: GraphModule, onnx_model_path, model_name, **kwargs):
     logger.info("Extract qparams for Academic_NLP.")
@@ -302,7 +332,7 @@ def deploy_qparams_Academic_NLP(model: GraphModule, onnx_model_path, model_name,
                     else:
                         f.write("{}     {:.7f}     {:.7f}     {:.7f}\n".format(name, value['threshold'], value['min'], value['max']))
                 else:
-                    tmpstr = "{} {} {} {} {}\n".format(name, len(value['step']), ' '.join([str(i) for i in value['step']]), 
+                    tmpstr = "{} {} {} {} {}\n".format(name, len(value['step']), ' '.join([str(i) for i in value['step']]),
                             len(value['zero_point']), ' '.join([str(i) for i in value['zero_point']]))
                     if name.endswith('_weight_fp8') or name.endswith('_bias_fp8'):
                         weight_scale_fp8.append(tmpstr)
@@ -342,7 +372,7 @@ def deploy_qparams_Academic_NLP(model: GraphModule, onnx_model_path, model_name,
                     else:
                         f.write("{} {:.7f} {:.7f} {:.7f}\n".format(name, value['threshold'], value['min'], value['max']))
                 else:
-                    tmpstr = "{} {} {} {} {}\n".format(name, len(value['step']), ' '.join([str(i) for i in value['step']]), 
+                    tmpstr = "{} {} {} {} {}\n".format(name, len(value['step']), ' '.join([str(i) for i in value['step']]),
                             len(value['zero_point']), ' '.join([str(i) for i in value['zero_point']]))
                     if name.endswith('_weight') or name.endswith('_bias'):
                         weight_scale.append(tmpstr)
@@ -360,8 +390,12 @@ def deploy_qparams_Academic_NLP(model: GraphModule, onnx_model_path, model_name,
 def deploy_qparams_sophgo_tpu(model: GraphModule, onnx_model_path, model_name, quant_type_dict, **kwargs):
     logger.info("Extract qparams for sophgo_tpu.")
     cali_mode = "sophgo_tpu"
-    remove_fakequantize_and_collect_params_sophgo(onnx_model_path, model_name, quant_type_dict)
-    print("导出calitable")
+    global model_onnx_mem
+    export_to_mem = 'not_gen_bmodel' in kwargs and kwargs['not_gen_bmodel']
+    if not export_to_mem:
+        model_onnx_mem = None
+    model_onnx_mem = remove_fakequantize_and_collect_params_sophgo(onnx_model_path, model_name, quant_type_dict, model_onnx_mem)
+    # print("导出calitable")
     output_path = osp.dirname(onnx_model_path)
     context_filename = osp.join(output_path, '{}_clip_ranges.json'.format(model_name))
     file_h = open(context_filename, "r")
@@ -453,6 +487,7 @@ def convert_deploy(model: GraphModule, net_type='CNN',
                 def forward(self, input_0, input_1):
                     pass
     """
+    batch_size = next(iter(input_shape_dict.values()))[0]
     quant_type_dict = get_quant_type_from_fakequant_type(model)
     kwargs = {
         'input_shape_dict': input_shape_dict,
@@ -466,12 +501,15 @@ def convert_deploy(model: GraphModule, net_type='CNN',
     kwargs.update(extra_kwargs)
     deploy_model = deepcopy_graphmodule(model)
     for convert_function in NET_DEPLOY_FUNCTION[net_type]:
+        s0 = time.time()
         convert_function(deploy_model, **kwargs)
+        print(f'convert_function:{convert_function.__name__}, time:{time.time() - s0}')
 
     if deploy and chip != 'academic':
         if val_loader == None:
             print(f'VAL Loader not set for deploy!')
             return
+        export_to_mm = 'not_gen_bmodel' in kwargs and kwargs['not_gen_bmodel']
         mlir_scale = '1,1,1'
         mlir_mean = '0,0,0'
         transforms = val_loader.dataset.transform.transforms
@@ -484,28 +522,51 @@ def convert_deploy(model: GraphModule, net_type='CNN',
                 mlir_scale = ','.join([str(round(i,4)) for i in mlir_scale.tolist()])
                 mlir_mean = ','.join([str(round(i,4)) for i in mlir_mean.tolist()])
 
-        onnx_filename = os.path.join(output_path, '{}_deploy_model.onnx'.format(model_name))
+        if not export_to_mm:
+            onnx_filename = os.path.join(output_path, '{}_deploy_model.onnx'.format(model_name))
+        else:
+            global model_onnx_mem
+            onnx_filename = model_onnx_mem
         shape_str_list = []
         for name in input_shape_dict:
             shape_str = ','.join([str(i) for i in input_shape_dict[name]])
             shape_str_list.append(f'[{shape_str}]')
         shape_str_list = ','.join(shape_str_list)
-        cmd_str = f"model_transform.py \
-        --model_name {model_name}_qat \
-        --model_def {onnx_filename} \
-        --input_shapes [{shape_str_list}] \
-        --mean {mlir_scale} \
-        --scale {mlir_mean} \
-        --keep_aspect_ratio \
-        --pixel_format rgb \
-        --mlir {model_name}_qat.mlir"
-        print('cmd_str:', cmd_str)
-        os.system(cmd_str)
+        
+        if export_to_mm:
+            s0 = time.time()
+            model_transform_func(f'{model_name}_qat', 
+                                onnx_filename, list(input_shape_dict.values()), 
+                                mlir_scale, mlir_mean,
+                                f'{model_name}_qat.mlir')
+            print(f'model_transform_func time:{time.time() - s0}')
+        else:
+            cmd_str = f"model_transform.py \
+            --model_name {model_name}_qat \
+            --model_def {onnx_filename} \
+            --input_shapes [{shape_str_list}] \
+            --mean {mlir_scale} \
+            --scale {mlir_mean} \
+            --keep_aspect_ratio \
+            --pixel_format rgb \
+            --mlir {model_name}_qat.mlir"
+            print('model_transform cmd_str:', cmd_str)
+            os.system(cmd_str)
 
         calibration_table = os.path.join(output_path, '{}_cali_table_from_sophgo_mq_sophgo_tpu'.format(model_name))
         test_input = os.path.join(output_path, 'input_data_0.npz')
         test_reference = os.path.join(output_path, 'layer_outputs_0.npz')
         quantize_table = ''
+        not_gen_bmodel = ''
+        if export_to_mm:
+            test_input, test_reference = '', ''
+            not_gen_bmodel = '--not_gen_bmodel'
+        else:
+            test_input = f'--test_input {test_input}'
+            test_reference = f'--test_reference {test_reference}'
+        if batch_size == 1:
+            test_input, test_reference = '', ''
+
         quantize_mode = 'INT8'
         quantize_str = 'int8_sym'
         if 'bf16_mix_prec' in kwargs and kwargs['bf16_mix_prec']:
@@ -514,18 +575,111 @@ def convert_deploy(model: GraphModule, net_type='CNN',
             quantize_mode = 'BF16'
             quantize_str = 'bf16'
         bmodel_ext = 'cvimodel' if chip in ['MARS3', 'CV183X', 'CV182X', 'CV181X', 'CV180X', 'CV186X'] else 'bmodel'
-        os.system(f"model_deploy.py \
+        cmd_str = f"model_deploy.py \
         --mlir {model_name}_qat.mlir \
         --quantize {quantize_mode} \
         --calibration_table {calibration_table} {quantize_table} \
-        --chip {chip} \
-        --test_input {test_input} \
-        --test_reference {test_reference} \
+        --chip {chip} {test_input} {test_reference}\
         --fazzy_match \
-        --tolerance 0.99,0.90 --debug \
-        --model {model_name}_qat_{chip.lower()}_{quantize_str}.{bmodel_ext}")
+        --tolerance 0.99,0.90 --debug {not_gen_bmodel}\
+        --model {model_name}_qat_{chip.lower()}_{quantize_str}.{bmodel_ext}"
+        print('model_deploy cmd_str:', cmd_str)
+        s0 = time.time()
+        os.system(cmd_str)
+        print(f'model_deploy time:{time.time() - s0}')
         return f'./{model_name}_qat_{chip.lower()}_{quantize_str}_tpu.mlir'
 
+def lower_net(model_name, chip, output_path):
+    cali_table = os.path.join(output_path, '{}_cali_table_from_sophgo_mq_sophgo_tpu'.format(model_name))
+    cmd_str = f"tpuc-opt {model_name}_qat_origin.mlir --shape-infer --canonicalize --extra-optimize -o {model_name}_qat.mlir"
+    print(f'cmd_str:{cmd_str}')
+    s0 = time.time()
+    os.system(cmd_str)
+    print(f'convert origin mlir, time:{time.time() - s0}')
+
+    cmd_str = f"tpuc-opt {model_name}_qat.mlir --processor-assign=\"chip={chip.lower()} num_device=1 num_core=1\"  \
+                         --import-calibration-table=\"file={cali_table} asymmetric=false\" --processor-top-optimize \
+                         --convert-top-to-tpu=\"mode=INT8 asymmetric=false doWinograd=false ignore_f16_overflow=true\" \
+                         --canonicalize --weight-fold -o  {model_name}_qat_{chip.lower()}_int8_sym_tpu.mlir"
+    print(f'cmd_str:{cmd_str}')
+    s0 = time.time()
+    os.system(cmd_str)
+    print(f'convert top mlir, time:{time.time() - s0}')
+
+def find_new_param(model, unique_id):
+    global param_to_idx_dict
+    for name, param in model.named_parameters():
+        if name in param_to_idx_dict and unique_id == param_to_idx_dict[name][1]:
+            tmp = param.cpu().detach().numpy()
+            print(f'find torch name:{name}, shape:{tmp.shape}')
+            return tmp
+
+def update_model_param(model, model_name='sophgo_mq_qmodel', chip= 'CV183X', output_path='./'):
+    parser=MlirParser(f'{model_name}_qat_origin.mlir')
+    weight_file_name = parser.module_weight_file    
+    w_ = np.load(weight_file_name)
+    w = {}
+    for k in w_:
+        w[k] = w_[k]
+    file_h = open('/tmp/{}_weight_name_to_unique_id.json'.format(model_name), "r")
+    weight_name_to_unique_id = json.loads(file_h.read())
+    file_h.close()
+    module_tmp = copy.deepcopy(model)
+    convert_merge_bn(module_tmp.eval())
+    for item in w:
+        item2 = item
+        if item not in weight_name_to_unique_id:
+            item2 = item[:len(item) - 4]
+            if item2 not in weight_name_to_unique_id:
+                print(f'warning, {item} not in weight_name_to_unique_id')
+                continue
+        unique_id = weight_name_to_unique_id[item2]
+        print(f'update {item}, unique_id:{unique_id}')
+        tmp = find_new_param(module_tmp, unique_id)
+        if tmp is None:
+            print(f'warning, {item}, find_new_param fail')
+            continue
+        w[item] = tmp
+    np.savez(weight_file_name, **w)
+
+    file_h = open('/tmp/{}_clip_ranges.json'.format(model_name), "r")
+    blob_range = json.loads(file_h.read())["sophgo_tpu"]
+    file_h.close()
+    cali_table = osp.join(output_path, '{}_cali_table_from_sophgo_mq_sophgo_tpu'.format(model_name))
+    with open(cali_table, 'w') as f:
+        f.write(f"# work_mode:QAT_all_int8 #Automatically generated, do not modify, work_mode choice:[QAT_all_int8, int4_and_int8_mix, int4_and_int8_mix_no_fc]\n")
+        f.write("# op_name    threshold    min    max\n")
+        weight_scale = []
+        int4_th = []
+        for name, value in blob_range.items():
+            unique_id = value['param_id']['step']
+            print(f'blob_range, update {name}, unique_id:{unique_id}')
+            step =  find_new_param(module_tmp, unique_id)
+            if 'threshold' in value:
+                threshold = float(step[0]*128)
+                v_min = float(step[0]*-128)
+                v_max = float(step[0]*127)
+                tmpstr = "{} {:.7f} {:.7f} {:.7f}\n".format(name[:-2], threshold, v_min, v_max)
+                if name.endswith('_4'):
+                    int4_th.append(tmpstr)
+                elif name.endswith('_8'):
+                    f.write(tmpstr)
+                else:
+                    f.write("{} {:.7f} {:.7f} {:.7f}\n".format(name, threshold, v_min, v_max))
+            else:
+                tmpstr = "{} {} {} {} {}\n".format(name, len(value['step']), ' '.join([str(i) for i in step]),
+                        len(value['zero_point']), ' '.join([str(i) for i in value['zero_point']]))
+                if name.endswith('_weight') or name.endswith('_bias'):
+                    weight_scale.append(tmpstr)
+                else:
+                    f.write(tmpstr)
+        f.write('#int4_th\n')
+        for i in int4_th:
+            f.write(i)
+        f.write('#weight_scale\n')
+        for i in weight_scale:
+            f.write(i)
+    lower_net(model_name, chip, output_path)
 
 def export_onnx_with_fakequant_node(model: GraphModule, net_type='CNN',
                    input_shape_dict=None, dummy_input=None, output_path='./',

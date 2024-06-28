@@ -3,14 +3,16 @@ from enum import Enum
 from typing import Any, Dict
 import types
 import inspect
-
+import copy
+import os
+import gc
 import torch
 from torch.fx import Tracer
 from torch.fx.graph_module import GraphModule
 from torch.quantization.quantize_fx import _swap_ff_with_fxff
 from torch.quantization import QConfig
-import torch.nn.intrinsic as nni
-import sophgo_mq.nn.intrinsic as qnni
+from sophgo_mq.convert_deploy import convert_deploy, param_to_idx_dict, convert_merge_bn
+from sophgo_mq.utils.utils import generate_random_string
 
 from sophgo_mq.fake_quantize import (
     LearnableFakeQuantize,
@@ -50,6 +52,8 @@ from sophgo_mq.utils.logger import logger
 from sophgo_mq.utils.registry import DEFAULT_MODEL_QUANTIZER
 from sophgo_mq.scheme import QuantizeScheme
 import sophgo_mq.nn.intrinsic.qat as qnniqat
+
+first_call_in = True
 
 __all__ = ['prepare_by_platform']
 
@@ -566,8 +570,11 @@ def prepare_constant_dict(graph: torch.fx.Graph, model: torch.nn.Module):
     return constant_dict
 
 def prepare_by_platform(
+        arch: str,
         model: torch.nn.Module,
-        input_shape_dict: list = None,
+        net_type = 'CNN',
+        input_shape_dict: list = None, cuda:int = None,
+        val_loader = None,
         prepare_custom_config_dict: Dict[str, Any] = {},
         custom_tracer: Tracer = None):
     """
@@ -660,4 +667,29 @@ def prepare_by_platform(
                 if inspect.ismethod(_attr):
                     _attr = types.MethodType(getattr(_type, attr_name), cur_module)
                 setattr(cur_module, attr_name, _attr)
+    global first_call_in
+    if first_call_in:
+        print('>>>Gets the mapping between the pytorch param parameter and the parameter to be updated in the tpu-mlir...')
+        module_tmp = copy.deepcopy(prepared)
+        for images, _ in val_loader:
+            if cuda is not None:
+                images = images.cuda(cuda, non_blocking=True)
+            torch.cuda.set_device(cuda)
+            module_tmp = module_tmp.cuda(cuda)
+            module_tmp(images)
+            break
+        idx = 100
+        convert_merge_bn(module_tmp.eval())
+        global param_to_idx_dict
+        for name, param in module_tmp.named_parameters():
+            param.data[0] = idx
+            unique_id = generate_random_string(30)
+            print(f'prepare_by_platform, name: {name}, data0:{idx}, unique_id: {unique_id}')
+            param_to_idx_dict[name] = [idx,unique_id]
+            idx = idx + 1
+        convert_deploy(module_tmp, net_type, input_shape_dict=input_shape_dict,
+            model_name='{}'.format(arch), not_gen_bmodel = True,
+            output_path='/tmp/', bf16_mix_prec = False, deploy=False, chip=chip, val_loader=val_loader)
+        first_call_in = False
+        print('>>>Gets the mapping, end')
     return prepared

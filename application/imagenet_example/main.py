@@ -14,6 +14,7 @@ import numpy as np
 import copy
 
 import torch
+import gc
 import torch.nn as nn
 import torch.nn.parallel
 import torch.backends.cudnn as cudnn
@@ -25,16 +26,16 @@ import torch.utils.data.distributed
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
-from sophgo_mq.convert_deploy import convert_deploy, convert_onnx, export_onnx_with_fakequant_node
+from sophgo_mq.convert_deploy import convert_deploy, convert_onnx, export_onnx_with_fakequant_node, update_model_param
 from sophgo_mq.prepare_by_platform import prepare_by_platform
 from sophgo_mq.utils.state import enable_calibration, enable_quantization, disable_all
-import tpu_mlir
+from sophgo_mq.utils.utils import generate_random_string
 from tools.model_runner import mlir_inference
+import pymlir
 
 model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
     and callable(models.__dict__[name]))
-
 
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 parser.add_argument('--train_data', metavar='DIR',
@@ -105,6 +106,9 @@ parser.add_argument('--fp8_e5m2', action='store_true')
 parser.add_argument('--bf16_mix_prec', action='store_true')
 parser.add_argument('--export_onnx_before_training', action='store_true')
 parser.add_argument('--print_freq', default=5, type=int, help='print_freq')
+parser.add_argument('--use_tpu_mlir_fwd', action='store_true')
+parser.add_argument('--show_gpu_status', action='store_true')
+parser.add_argument('--debug_cmd', type=str, default='')
 
 best_acc1 = 0
 
@@ -158,15 +162,7 @@ def main():
     time_end = time.time()
     print('totally time is ', time_end-time_start)
 
-def generate_random_string(length):
-    """
-    生成指定长度的随机字符串，包含大小写字母和数字。
-    """
-    chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
-    return ''.join(random.choices(chars, k=length))
-
 features_out_hook = {}
-
 def hook(module, fea_in, fea_out):
     name = generate_random_string(15)
     global features_out_hook
@@ -178,10 +174,11 @@ def hook(module, fea_in, fea_out):
 
 def gen_test_ref_data(cali_loader, model, args):
     model.eval()
-
     hook_handles = []
     input_data = {}
-    data_num = 3
+    data_num = 1
+    if args.fast_test:
+        data_num = 1
     for name, child in model.named_modules():
         hd = child.register_forward_hook(hook=hook)
         hook_handles.append(hd)
@@ -194,7 +191,6 @@ def gen_test_ref_data(cali_loader, model, args):
             else:
                 images = images.cuda(args.cuda, non_blocking=True)
             output = model(images)
-
             if i < data_num:
                 print("gen_test_ref_data ==> ", i)
                 input_data['data'] = images.cpu().numpy()
@@ -256,7 +252,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     if args.pre_eval_and_export:
         print('原始onnx模型精度')
-        validate(val_loader, model.eval(), criterion, args)  #这里未执行model.cuda()，会报错
+        validate(val_loader, model.eval(), criterion, args, True)  #这里未执行model.cuda()，会报错
 
         # kwargs = {
         #     'input_shape_dict': {'data': [args.deploy_batch_size, 3, 224, 224]},
@@ -347,8 +343,10 @@ def main_worker(gpu, ngpus_per_node, args):
                                         'wobserver': 'MinMaxObserver',
                                         }
                                     }
-        model = prepare_by_platform(model, input_shape_dict = {'data': [args.deploy_batch_size, 3, 224, 224]}, prepare_custom_config_dict=extra_prepare_dict)
-        print('>>>>>prepared module:', model)
+        model = prepare_by_platform(args.arch, model, net_type='CNN', val_loader = val_loader, 
+                                    input_shape_dict = {'data': [args.batch_size, 3, 224, 224]}, cuda = args.cuda, 
+                                    prepare_custom_config_dict=extra_prepare_dict)
+        # print('>>>>>prepared module:', model)
 
     if not torch.cuda.is_available():
         print('using CPU, this will be slow')
@@ -412,6 +410,7 @@ def main_worker(gpu, ngpus_per_node, args):
     cudnn.benchmark = True
     # cudnn.deterministic = True #避免计算结果波动
 
+
     # optionally resume from a checkpoint
     if args.resume:
         if os.path.isfile(args.resume):
@@ -458,17 +457,24 @@ def main_worker(gpu, ngpus_per_node, args):
                 model_name='{}'.format(args.arch), output_path=args.output_path, deploy=True, chip=args.chip, val_loader=val_loader)
         exit(0)
 
-
-
     if args.fast_test:
         args.epochs = 1
+    
+    print(f'>>> convert_deploy before train ')
+    mlir_model_path = convert_deploy(model.eval(), 'CNN', input_shape_dict=
+        {'data': [args.batch_size, 3, 224, 224]},
+        model_name='{}'.format(args.arch),
+        output_path=args.output_path, bf16_mix_prec = args.bf16_mix_prec, not_gen_bmodel = True,
+        deploy = True, val_loader = val_loader, chip = args.chip)
+    print(f'>>> convert_deploy before train end, mlir_model_path:{mlir_model_path}')
+
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             train_sampler.set_epoch(epoch)
         adjust_learning_rate(optimizer, epoch, args)
 
         # train for one epoch
-        train(train_loader, model, criterion, optimizer, epoch, args)
+        train(train_loader, model, criterion, optimizer, epoch, args, val_loader, mlir_model_path)
 
         # evaluate on validation set
         if epoch == args.epochs - 1:
@@ -481,11 +487,17 @@ def main_worker(gpu, ngpus_per_node, args):
     enable_quantization(model)
 
     net_type = 'CNN'
+    print('>>>>>>Generate a model for accuracy testing:')
+    mlir_model_path = convert_deploy(model.eval(), net_type, input_shape_dict=
+        {'data': [args.batch_size, 3, 224, 224]},
+        model_name='{}'.format(args.arch), not_gen_bmodel = True,
+        output_path=args.output_path, bf16_mix_prec = args.bf16_mix_prec, deploy=True, chip=args.chip, val_loader=val_loader)
+    validate_for_chip_model(bmodel_test_loader, mlir_model_path, criterion, args)
+    print('>>>>>>Generate the model for final deployment on the chip:')
     mlir_model_path = convert_deploy(model.eval(), net_type, input_shape_dict=
         {'data': [args.deploy_batch_size, 3, 224, 224]},
         model_name='{}'.format(args.arch),
         output_path=args.output_path, bf16_mix_prec = args.bf16_mix_prec, deploy=True, chip=args.chip, val_loader=val_loader)
-    validate_for_chip_model(bmodel_test_loader, mlir_model_path, criterion, args)
 
 def prepare_dataloader(args):
     traindir = os.path.join(args.train_data, 'train')
@@ -514,14 +526,13 @@ def prepare_dataloader(args):
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
         num_workers=args.workers, pin_memory=True, sampler=train_sampler)
-
-    cali_num = 200
-    assert cali_num % args.deploy_batch_size == 0
+    
+    cali_num = (2000//args.batch_size)*args.batch_size
     cali_dataset = torch.utils.data.Subset(train_dataset, indices=torch.arange(cali_num))
-    cali_loader = torch.utils.data.DataLoader(cali_dataset, batch_size=args.deploy_batch_size, shuffle=False,
+    cali_loader = torch.utils.data.DataLoader(cali_dataset, batch_size=args.batch_size, shuffle=False,
                                                 num_workers=args.workers, pin_memory=True)
 
-    bmodel_test_loader = torch.utils.data.DataLoader(val_dataset, batch_size=args.deploy_batch_size, shuffle=False,
+    bmodel_test_loader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False,
                                                 num_workers=args.workers, pin_memory=True)
     val_loader = torch.utils.data.DataLoader(
         val_dataset,
@@ -591,39 +602,67 @@ def get_node_input_by_module_name(qname, model):
         return scale_name[:len(scale_name)-len(post_str)]
     else:
         return ''
-
-def train(train_loader, model, criterion, optimizer, epoch, args):
+    
+def train(train_loader, model, criterion, optimizer, epoch, args, val_loader, mlir_model_path):
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
-    losses = AverageMeter('Loss', ':.4e')
-    top1 = AverageMeter('Acc@1', ':6.2f')
-    top5 = AverageMeter('Acc@5', ':6.2f')
+    meters = [batch_time, data_time]
+    if args.show_gpu_status:
+        losses = AverageMeter('Loss', ':.4e')
+        top1 = AverageMeter('Acc@1', ':6.2f')
+        top5 = AverageMeter('Acc@5', ':6.2f')
+        meters.extend([losses, top1, top5])
+    if args.use_tpu_mlir_fwd:
+        loss2es = AverageMeter('Loss2', ':.4e')
+        top1_2 = AverageMeter('Acc@1_2', ':6.2f')
+        top5_2 = AverageMeter('Acc@5_2', ':6.2f')
+        meters.extend([loss2es, top1_2, top5_2])
     progress = ProgressMeter(
         len(train_loader),
-        [batch_time, data_time, losses, top1, top5],
+        meters,
         prefix="Epoch: [{}]".format(epoch))
-
     # switch to train mode
     model.train()
-
+    inputs = {}
     end = time.time()
-    for i, (images, target) in enumerate(train_loader):
+    s_time = time.time()
+    for idx, (images, target) in enumerate(train_loader):
         # measure data loading time
+        batch_size = images.size(0)
         data_time.update(time.time() - end)
-
         if args.cuda is not None and torch.cuda.is_available():
             images = images.cuda(args.cuda, non_blocking=True)
             target = target.cuda(args.cuda, non_blocking=True)
 
         # compute output
+        s0 = time.time()
         output = model(images)
+        print(f'gpu_inference time:{time.time() - s0}')
         loss = criterion(output, target)
+        if args.show_gpu_status:
+            acc1, acc5 = accuracy(output, target, topk=(1, 5))
+            losses.update(loss.item(), batch_size)
+            top1.update(acc1[0], batch_size)
+            top5.update(acc5[0], batch_size)
 
-        # measure accuracy and record loss
-        acc1, acc5 = accuracy(output, target, topk=(1, 5))
-        losses.update(loss.item(), images.size(0))
-        top1.update(acc1[0], images.size(0))
-        top5.update(acc5[0], images.size(0))
+        if args.use_tpu_mlir_fwd:
+            s0 = time.time()
+            print(f'>>> update_model_param start')
+            update_model_param(model, args.arch, args.chip, args.output_path)
+            print(f'update_model_param time:{time.time() - s0}')
+            target = target.cpu()
+            inputs['data'] = images.cpu().numpy()
+            s0 = time.time()
+            output = mlir_inference(inputs, mlir_model_path, dump_all = False, mute = False, use_cuda = True)
+            print(f'mlir_inference time:{time.time() - s0}')
+            output = torch.from_numpy(list(output.values())[0])
+            loss_2 = criterion(output, target).item()
+            acc1_2, acc5_2 = accuracy(output, target, topk=(1, 5))
+            loss2es.update(loss_2, batch_size)
+            loss.data.copy_(loss_2)
+            top1_2.update(acc1_2[0], batch_size)
+            top5_2.update(acc5_2[0], batch_size)
+            model.train()
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
@@ -634,8 +673,8 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
         batch_time.update(time.time() - end)
         end = time.time()
 
-        if i % args.print_freq == 0:
-            progress.display(i)
+        if idx % args.print_freq == 0:
+            progress.display(idx)
 
         # # 检查训练过程参数是否异常
         # for param in model.named_parameters():
@@ -644,14 +683,27 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
         #         print(param[0], 'has Nan', param[1].shape, 'sum:', sum)
 
         if args.fast_test:
-            if i % 64 == 0:
+            if idx % 32 == 0:
                 break
+        print(f'iteration run time:{time.time() - s_time}')
+        s_time = time.time()
+        if 'run_1_time' in args.debug_cmd:
+            exit(0)
 
-def validate(val_loader, model, criterion, args):
+
+def validate(val_loader, model, criterion, args, force_use_gpu = False):
     batch_time = AverageMeter('Time', ':6.3f')
-    losses = AverageMeter('Loss', ':.4e')
-    top1 = AverageMeter('Acc@1', ':6.2f')
-    top5 = AverageMeter('Acc@5', ':6.2f')
+    meters = [batch_time]
+    if args.show_gpu_status:
+        losses = AverageMeter('Loss', ':.4e')
+        top1 = AverageMeter('Acc@1', ':6.2f')
+        top5 = AverageMeter('Acc@5', ':6.2f')
+        meters.extend([losses, top1, top5])
+    if args.use_tpu_mlir_fwd:
+        losses_2 = AverageMeter('Loss_2', ':.4e')
+        top1_2 = AverageMeter('Acc@1_2', ':6.2f')
+        top5_2 = AverageMeter('Acc@5_2', ':6.2f')
+        meters.extend([losses_2, top1_2, top5_2])
     progress = ProgressMeter(
         len(val_loader),
         [batch_time, losses, top1, top5],
@@ -659,11 +711,18 @@ def validate(val_loader, model, criterion, args):
     print('args.print_freq:', args.print_freq)
     # switch to evaluate mode
     model.eval()
-
-
-
     with torch.no_grad():
         end = time.time()
+        if args.use_tpu_mlir_fwd and not force_use_gpu:
+            mlir_model_path = convert_deploy(model.eval(), 'CNN', input_shape_dict=
+                {'data': [args.batch_size, 3, 224, 224]},
+                model_name='{}'.format(args.arch),
+                output_path=args.output_path, bf16_mix_prec = args.bf16_mix_prec, 
+                deploy = True, val_loader = val_loader, chip = args.chip)
+            mlir_cuda = pymlir.cuda()
+            mlir_cuda.load(mlir_model_path)
+            output_names = mlir_cuda.get_output_names()
+            print('output_names:', output_names)
         for i, (images, target) in enumerate(val_loader):
             if not args.cpu:
                 if args.cuda is not None:
@@ -677,12 +736,20 @@ def validate(val_loader, model, criterion, args):
             # compute output
             output = model(images)
             loss = criterion(output, target)
-
-            # measure accuracy and record loss
             acc1, acc5 = accuracy(output, target, topk=(1, 5))
             losses.update(loss.item(), images.size(0))
             top1.update(acc1[0], images.size(0))
             top5.update(acc5[0], images.size(0))
+            
+            if args.use_tpu_mlir_fwd and not force_use_gpu:
+                mlir_cuda.set_tensor('data', images.cpu().numpy())
+                mlir_cuda.invoke()
+                output = mlir_cuda.get_tensor(output_names[0])
+                loss = criterion(output, target)
+                acc1, acc5 = accuracy(output, target, topk=(1, 5))
+                losses_2.update(loss.item(), images.size(0))
+                top1_2.update(acc1[0], images.size(0))
+                top5_2.update(acc5[0], images.size(0))
 
             # measure elapsed time
             batch_time.update(time.time() - end)
@@ -696,8 +763,9 @@ def validate(val_loader, model, criterion, args):
                     break
 
         # TODO: this should also be done with the ProgressMeter
-        print(' * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'
-            .format(top1=top1, top5=top5))
+        print(' * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f} Acc@1_2 {top1_2.avg:.3f} Acc@5_2 {top5_2.avg:.3f}'
+            .format(top1=top1, top5=top5, top1_2=top1_2, top5_2=top5_2))
+
     return top1.avg
 
 
@@ -738,12 +806,12 @@ def validate_for_chip_model(bmodel_test_loader, mlir_model_path, criterion, args
         if i % args.print_freq == 0:
             progress.display(i)
 
-        # if args.fast_test:
-        #     if i % 100 == 0:
-        #         break
+        if args.fast_test:
+            if i % 3 == 0:
+                break
 
     # TODO: this should also be done with the ProgressMeter
-    print(' * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'
+    print('>>>>>>the deployment accuracy of the model on the chip is: Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'
         .format(top1=top1, top5=top5))
 
     return top1.avg
@@ -797,9 +865,9 @@ def validate_onnx(criterion, args):
             if i % args.print_freq == 0:
                 progress.display(i)
 
-            # if args.fast_test:
-            #     if i % 100 == 0:
-            #         break
+            if args.fast_test:
+                if i % 10 == 0:
+                    break
 
         # TODO: this should also be done with the ProgressMeter
         print('deploy_model.onnx完成所有处理后的onnxruntime测试精度:')

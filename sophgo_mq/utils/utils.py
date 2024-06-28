@@ -1,6 +1,7 @@
 import copy
-
+import os
 import torch
+import random
 import torch.fx
 from torch.fx import GraphModule
 from torch.nn import Module
@@ -16,7 +17,10 @@ except (ModuleNotFoundError, AssertionError):
     import torch.distributed as dist
     if torch.distributed.is_initialized():
         USE_DDP = True
-
+        
+def generate_random_string(length):
+    chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+    return ''.join(random.choices(chars, k=length))
 
 def sync_tensor(tensor):
     global USE_LINK

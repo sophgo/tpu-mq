@@ -17,7 +17,6 @@ from sophgo_mq.deploy.common import (
     parse_attrs
 )
 
-
 PERCHANNEL_FAKEQUANTIZER = ['FakeQuantizeLearnablePerchannelAffine', 
                             'FixedPerChannelAffine',
                             'FakeQuantizeDSQPerchannel',
@@ -30,6 +29,7 @@ PERTENSOR_FAKEQUANTIZER = ['LearnablePerTensorAffine',
                            'Cast']
 ALL_FAKEQUANTIZER = PERCHANNEL_FAKEQUANTIZER + PERTENSOR_FAKEQUANTIZER
 
+first_call_in = True
 
 class LinearQuantizer_process(object):
     # some method like dorefa need pre-compute weights
@@ -139,10 +139,10 @@ class LinearQuantizer_process(object):
             new_data = np.array(new_data)
             if transposed:
                 new_data = new_data.transpose(1, 0, 2, 3)
-            logger.info(f'Clip weights <{tensor_name}> to per-channel ranges.')
+            # logger.info(f'Clip weights <{tensor_name}> to per-channel ranges.')
         else:
             new_data = np.clip(data, clip_range_min, clip_range_max)
-            logger.info(f'Clip weights <{tensor_name}> to range [{clip_range_min}, {clip_range_max}].')
+            # logger.info(f'Clip weights <{tensor_name}> to range [{clip_range_min}, {clip_range_max}].')
         new_data = numpy_helper.from_array(new_data)
         named_initializer[tensor_name].raw_data = new_data.raw_data
     
@@ -253,8 +253,51 @@ class LinearQuantizer_process(object):
             graph.node.remove(node)
         return
 
-    def remove_fakequantize_and_collect_params(self, onnx_path, model_name, quant_type_dict):
-        model = onnx.load(onnx_path)
+    def process_param_map(self, node, named_initializer, inp2node, out2node, weight_name_to_unique_id_dict, weight_tensor_name):
+        global first_call_in
+        if not first_call_in:
+            return
+        def find_weight(tensor):
+            if tensor not in named_initializer:
+                _node = out2node[tensor]
+                for inp in _node.input:
+                    return find_weight(inp)
+            return tensor
+                
+        weight = node.input[0] if node.input[0] in named_initializer else find_weight(node.input[0])
+        tmp = numpy_helper.to_array(named_initializer[weight])
+        print(f'weight_shape:{tmp.shape}, first_call_in:{first_call_in}')
+        weight_data0 = tmp.reshape(-1)[0]
+        print(f'weight_data0:{weight_data0}')
+        tmp = self.find_param_map(weight_data0)
+        weight_name_to_unique_id_dict[weight_tensor_name] = tmp
+        print(f'weight_name_to_unique_id_dict, weight_name:{weight_tensor_name}, unique_id: {tmp}')
+    
+        next_nodes = inp2node[node.output[0]]
+        assert len(next_nodes) == 1
+        next_node = next_nodes[0][0]
+        if len(next_node.input) > 2:
+            bias_name = next_node.input[2] if next_node.input[2] in named_initializer else find_weight(next_node.input[2])
+            bias_data0 = numpy_helper.to_array(named_initializer[bias_name]).reshape(-1)[0]
+            print(f'bias_data0:{bias_data0}')
+            tmp = self.find_param_map(bias_data0)
+            weight_name_to_unique_id_dict[bias_name] = tmp
+            print(f'weight_name_to_unique_id_dict, bias_name:{bias_name}, unique_id: {tmp}')
+            
+    def find_param_map(self, data0):
+        unique_id = 'null'
+        from sophgo_mq.convert_deploy import param_to_idx_dict
+        global first_call_in
+        if first_call_in:
+            for k in param_to_idx_dict:
+                if int(data0) == param_to_idx_dict[k][0]:
+                    unique_id = param_to_idx_dict[k][1]
+                    print(f'deploy_sophgo, name: {k}, data0:{int(data0)}, unique_id: {unique_id}')
+                    break
+        return unique_id
+
+    def remove_fakequantize_and_collect_params(self, onnx_path, model_name, quant_type_dict, model_onnx_mem):
+        model = onnx.load(onnx_path) if model_onnx_mem is None else model_onnx_mem
         graph = model.graph
         out2node, inp2node = update_inp2node_out2node(graph)
         name2data = prepare_data(graph)
@@ -267,15 +310,16 @@ class LinearQuantizer_process(object):
         # out2node, inp2node = update_inp2node_out2node(graph)
 
         clip_ranges = {}
+        weight_name_to_unique_id_dict = {}
         nodes_to_be_removed = []
         output_path = os.path.dirname(onnx_path)
         have_int4 = False
         pre_op_is_cast = False
         tensor_name_to_node_name = {}
-        
 
         for node in graph.node:
-            print(f'process node:{node.name}, type:{node.op_type}')
+            # if model_onnx_mem is None:
+            print(f'process_node :{node.name}, type:{node.op_type}')
             if node.op_type in ALL_FAKEQUANTIZER:
                 nodes_to_be_removed.append(node)
                 nodes_to_be_removed.extend(get_constant_inputs(node, out2node))
@@ -289,6 +333,9 @@ class LinearQuantizer_process(object):
                 nodes_to_be_removed.extend(redundant_nodes)
                 self.clip_weight(node, name2data, inp2node, named_initializer, quant_type_dict)
                 tensor_name, scale, zero_point, qmin, qmax, dtype, quant_type = self.parse_qparams(node, name2data, quant_type_dict)
+                self.process_param_map(node, named_initializer, inp2node, out2node, weight_name_to_unique_id_dict, tensor_name)
+                scale_id = self.find_param_map(scale[0])
+                zero_point_id = self.find_param_map(zero_point[0])
                 #卷积权重per-channel量化参数，bias的per-chan量化参数没有去调优
                 if len(next_nodes) == 1 and next_nodes[0][0].op_type in ['Gemm', 'Conv']:#当前伪量化节点只有1个后继，且第1个后继节点为conv类型
                     next_node_output = next_nodes[0][0].output[0]
@@ -305,7 +352,8 @@ class LinearQuantizer_process(object):
                                                 'max': [float(x) for x in scale * (qmax - zero_point)],
                                                 'bit': int(np.log2(qmax - qmin + 1)),
                                                 'type': dtype,
-                                                'quant_type': quant_type
+                                                'quant_type': quant_type,
+                                                'param_id': {'step':scale_id, 'zero_point':zero_point_id}
 						}
                     tensor_name_to_node_name[tensor_name] = {node.name: node.input}
 
@@ -314,6 +362,9 @@ class LinearQuantizer_process(object):
                     # fake quantize for weights
                     redundant_nodes = self.deal_with_weight_fakequant(node, out2node, inp2node, named_initializer)
                     tensor_name, scale, zero_point, qmin, qmax, dtype, quant_type = self.parse_qparams(node, name2data, quant_type_dict)
+                    self.process_param_map(node, named_initializer, inp2node, out2node, weight_name_to_unique_id_dict, tensor_name)
+                    scale_id = self.find_param_map(scale[0])
+                    zero_point_id = self.find_param_map(zero_point[0])
                     nodes_to_be_removed.extend(redundant_nodes)
                     self.clip_weight(node, name2data, inp2node, named_initializer, quant_type_dict)
                     assert next_nodes[0][0].op_type in ['Gemm', 'Conv']
@@ -325,10 +376,10 @@ class LinearQuantizer_process(object):
                                                 'bit': int(np.log2(qmax - qmin + 1)),
                                                 'type': dtype,
                                                 'ori_name': 'none',
-                                                'quant_type': quant_type
+                                                'quant_type': quant_type,
+                                                'param_id': {'step':scale_id, 'zero_point':zero_point_id}
                                                 }
                     tensor_name_to_node_name[tensor_name_new] = {node.name: node.input}
-
                 else:
                     # fake quantize for activations
                     self.deal_with_activation_fakequant(node, inp2node)
@@ -351,10 +402,11 @@ class LinearQuantizer_process(object):
                         #                                 }
                         continue
                     tensor_name, scale, zero_point, qmin, qmax, dtype, quant_type = self.parse_qparams(node, name2data, quant_type_dict)
+                    scale_id = self.find_param_map(scale[0])
+                    zero_point_id = self.find_param_map(zero_point[0])
                     bits = 4 if qmax == 7 else 8
                     if bits == 4:
                         have_int4 = True
-
                     tensor_name_new = tensor_name
                     if tensor_name in out2node:
                         tensor_name_new += '_{}'.format(out2node[tensor_name].op_type)
@@ -377,20 +429,21 @@ class LinearQuantizer_process(object):
                                                 'bit': int(np.log2(qmax - qmin + 1)),
                                                 'type': dtype,
                                                 'ori_name': 'none',
-                                                'quant_type': quant_type
+                                                'quant_type': quant_type,
+                                                'param_id': {'step':scale_id, 'zero_point':zero_point_id}
                                                 }
                     tensor_name_to_node_name[tensor_name_new+f'_{bits}'] = {node.name: node.input}
             pre_op_is_cast = False
 
         ### show relation between tensor name in clip_ranges with fake quant node name
-        print(">>>>> print tensor name to node name dict")
-        for key,subdict in tensor_name_to_node_name.items():
-            print(key," : ", list(subdict.keys()))
-            print("input is :", list(subdict.values()))
-            print("\n")
-        print(">>>>> end")
+        if model_onnx_mem is None:
+            print(">>>>> print tensor name to node name dict")
+            for key,subdict in tensor_name_to_node_name.items():
+                print(key," : ", list(subdict.keys()))
+                print("input is :", list(subdict.values()))
+                print("\n")
+            print(">>>>> end")
  
-
         for node in nodes_to_be_removed:
             graph.node.remove(node)
         # delete initializer
@@ -409,10 +462,20 @@ class LinearQuantizer_process(object):
         context_filename = os.path.join(output_path, '{}_clip_ranges.json'.format(model_name))
         with open(context_filename, 'w') as f:
             json.dump(context, f, indent=4)
-        onnx_filename = os.path.join(output_path, '{}_deploy_model.onnx'.format(model_name))
+        global first_call_in 
+        if first_call_in:
+            context_filename = os.path.join(output_path, '{}_weight_name_to_unique_id.json'.format(model_name))
+            with open(context_filename, 'w') as f:
+                json.dump(weight_name_to_unique_id_dict, f, indent=4)
+        first_call_in = False
         model_onnx = onnx.shape_inference.infer_shapes(model)
-        os.system(f"rm -f {onnx_filename}")
-        onnx.save(model_onnx, onnx_filename)
         logger.info("Finish deploy process.")
+        if model_onnx_mem is None:
+            onnx_filename = os.path.join(output_path, '{}_deploy_model.onnx'.format(model_name))
+            os.system(f"rm -f {onnx_filename}")
+            onnx.save(model_onnx, onnx_filename)
+            return None
+        else:
+            return model_onnx
 
 remove_fakequantize_and_collect_params_sophgo = LinearQuantizer_process().remove_fakequantize_and_collect_params
