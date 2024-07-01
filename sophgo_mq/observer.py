@@ -203,6 +203,7 @@ class EMAMinMaxObserver(ObserverBase):
         super(EMAMinMaxObserver, self).__init__(dtype, qscheme, reduce_range, quant_min, quant_max,
                                                 ch_axis, pot_scale, factory_kwargs)
         self.ema_ratio = ema_ratio
+        self.log_filter = False
 
     def forward(self, x_orig):
         r"""Records the running minimum and maximum of ``x``."""
@@ -211,6 +212,8 @@ class EMAMinMaxObserver(ObserverBase):
         x = x_orig.to(self.min_val.dtype)
         if self.ch_axis == -1:
             min_val_cur, max_val_cur = torch._aminmax(x)
+            if self.log_filter:
+                print(f'min_val_cur:{min_val_cur}, max_val_cur:{max_val_cur}')
         else:
             x_dim = x.size()
             new_axis_list = [i for i in range(len(x_dim))]  # noqa: C416

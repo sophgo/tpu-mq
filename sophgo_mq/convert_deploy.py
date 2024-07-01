@@ -332,7 +332,7 @@ def deploy_qparams_Academic_NLP(model: GraphModule, onnx_model_path, model_name,
                     else:
                         f.write("{}     {:.7f}     {:.7f}     {:.7f}\n".format(name, value['threshold'], value['min'], value['max']))
                 else:
-                    tmpstr = "{} {} {} {} {}\n".format(name, len(value['step']), ' '.join([str(i) for i in value['step']]),
+                    tmpstr = "{} {} {} {} {}\n".format(name, len(value['step']), ' '.join(['{:.7f}'.format(i) for i in value['step']]),
                             len(value['zero_point']), ' '.join([str(i) for i in value['zero_point']]))
                     if name.endswith('_weight_fp8') or name.endswith('_bias_fp8'):
                         weight_scale_fp8.append(tmpstr)
@@ -372,7 +372,7 @@ def deploy_qparams_Academic_NLP(model: GraphModule, onnx_model_path, model_name,
                     else:
                         f.write("{} {:.7f} {:.7f} {:.7f}\n".format(name, value['threshold'], value['min'], value['max']))
                 else:
-                    tmpstr = "{} {} {} {} {}\n".format(name, len(value['step']), ' '.join([str(i) for i in value['step']]),
+                    tmpstr = "{} {} {} {} {}\n".format(name, len(value['step']), ' '.join(['{:.7f}'.format(i) for i in value['step']]),
                             len(value['zero_point']), ' '.join([str(i) for i in value['zero_point']]))
                     if name.endswith('_weight') or name.endswith('_bias'):
                         weight_scale.append(tmpstr)
@@ -421,7 +421,7 @@ def deploy_qparams_sophgo_tpu(model: GraphModule, onnx_model_path, model_name, q
                 else:
                     f.write("{} {:.7f} {:.7f} {:.7f}\n".format(name, value['threshold'], value['min'], value['max']))
             else:
-                tmpstr = "{} {} {} {} {}\n".format(name, len(value['step']), ' '.join([str(i) for i in value['step']]),
+                tmpstr = "{} {} {} {} {}\n".format(name, len(value['step']), ' '.join(['{:.7f}'.format(i) for i in value['step']]),
                         len(value['zero_point']), ' '.join([str(i) for i in value['zero_point']]))
                 if name.endswith('_weight') or name.endswith('_bias'):
                     weight_scale.append(tmpstr)
@@ -521,6 +521,7 @@ def convert_deploy(model: GraphModule, net_type='CNN',
                 mlir_mean=mean_np/(std_np*mlir_scale)
                 mlir_scale = ','.join([str(round(i,4)) for i in mlir_scale.tolist()])
                 mlir_mean = ','.join([str(round(i,4)) for i in mlir_mean.tolist()])
+                print('mlir_mean:', mlir_mean, 'mlir_scale:', mlir_scale)
 
         if not export_to_mm:
             onnx_filename = os.path.join(output_path, '{}_deploy_model.onnx'.format(model_name))
@@ -548,23 +549,23 @@ def convert_deploy(model: GraphModule, net_type='CNN',
             --mean {mlir_scale} \
             --scale {mlir_mean} \
             --keep_aspect_ratio \
-            --pixel_format rgb \
+            --pixel_format rgb --debug \
             --mlir {model_name}_qat.mlir"
             print('model_transform cmd_str:', cmd_str)
             os.system(cmd_str)
 
         calibration_table = os.path.join(output_path, '{}_cali_table_from_sophgo_mq_sophgo_tpu'.format(model_name))
-        test_input = os.path.join(output_path, 'input_data_0.npz')
-        test_reference = os.path.join(output_path, 'layer_outputs_0.npz')
+        test_input_file = os.path.join(output_path, 'input_data_0.npz')            
+        test_reference_file = os.path.join(output_path, 'layer_outputs_0.npz')
         quantize_table = ''
         not_gen_bmodel = ''
         if export_to_mm:
             test_input, test_reference = '', ''
             not_gen_bmodel = '--not_gen_bmodel'
         else:
-            test_input = f'--test_input {test_input}'
-            test_reference = f'--test_reference {test_reference}'
-        if batch_size == 1:
+            test_input = f'--test_input {test_input_file}'
+            test_reference = f'--test_reference {test_reference_file}'
+        if batch_size == 1 or not os.path.exists(test_input_file) or not os.path.exists(test_reference_file):
             test_input, test_reference = '', ''
 
         quantize_mode = 'INT8'
@@ -589,32 +590,37 @@ def convert_deploy(model: GraphModule, net_type='CNN',
         print(f'model_deploy time:{time.time() - s0}')
         return f'./{model_name}_qat_{chip.lower()}_{quantize_str}_tpu.mlir'
 
-def lower_net(model_name, chip, output_path):
+def lower_net(model_name, chip, output_path, log_out = False):
     cali_table = os.path.join(output_path, '{}_cali_table_from_sophgo_mq_sophgo_tpu'.format(model_name))
     cmd_str = f"tpuc-opt {model_name}_qat_origin.mlir --shape-infer --canonicalize --extra-optimize -o {model_name}_qat.mlir"
-    print(f'cmd_str:{cmd_str}')
+    if log_out:
+        print(f'cmd_str:{cmd_str}')
     s0 = time.time()
     os.system(cmd_str)
-    print(f'convert origin mlir, time:{time.time() - s0}')
-
+    if log_out:
+        print(f'convert origin mlir, time:{time.time() - s0}')
+    
     cmd_str = f"tpuc-opt {model_name}_qat.mlir --processor-assign=\"chip={chip.lower()} num_device=1 num_core=1\"  \
                          --import-calibration-table=\"file={cali_table} asymmetric=false\" --processor-top-optimize \
                          --convert-top-to-tpu=\"mode=INT8 asymmetric=false doWinograd=false ignore_f16_overflow=true\" \
                          --canonicalize --weight-fold -o  {model_name}_qat_{chip.lower()}_int8_sym_tpu.mlir"
-    print(f'cmd_str:{cmd_str}')
+    if log_out:
+        print(f'cmd_str:{cmd_str}')
     s0 = time.time()
     os.system(cmd_str)
-    print(f'convert top mlir, time:{time.time() - s0}')
+    if log_out:
+        print(f'convert top mlir, time:{time.time() - s0}')
 
-def find_new_param(model, unique_id):
+def find_new_param(model, unique_id, log_out = False):
     global param_to_idx_dict
     for name, param in model.named_parameters():
         if name in param_to_idx_dict and unique_id == param_to_idx_dict[name][1]:
             tmp = param.cpu().detach().numpy()
-            print(f'find torch name:{name}, shape:{tmp.shape}')
+            if log_out:
+                print(f'find torch name:{name}, shape:{tmp.shape}, old_data0:{tmp.reshape(-1)[0]}')
             return tmp
 
-def update_model_param(model, model_name='sophgo_mq_qmodel', chip= 'CV183X', output_path='./'):
+def update_model_param(model, model_name='sophgo_mq_qmodel', chip= 'CV181X', output_path='./', log_out = False):
     parser=MlirParser(f'{model_name}_qat_origin.mlir')
     weight_file_name = parser.module_weight_file    
     w_ = np.load(weight_file_name)
@@ -624,21 +630,28 @@ def update_model_param(model, model_name='sophgo_mq_qmodel', chip= 'CV183X', out
     file_h = open('/tmp/{}_weight_name_to_unique_id.json'.format(model_name), "r")
     weight_name_to_unique_id = json.loads(file_h.read())
     file_h.close()
-    module_tmp = copy.deepcopy(model)
+    module_tmp = deepcopy_graphmodule(model)
     convert_merge_bn(module_tmp.eval())
     for item in w:
         item2 = item
         if item not in weight_name_to_unique_id:
-            item2 = item[:len(item) - 4]
+            item2 = item[:-4] #strip '_fix'
             if item2 not in weight_name_to_unique_id:
-                print(f'warning, {item} not in weight_name_to_unique_id')
+                if log_out:
+                    print(f'warning, {item} not in weight_name_to_unique_id')
                 continue
         unique_id = weight_name_to_unique_id[item2]
-        print(f'update {item}, unique_id:{unique_id}')
+        if log_out:
+            print(f'update {item}, unique_id:{unique_id}')
         tmp = find_new_param(module_tmp, unique_id)
         if tmp is None:
-            print(f'warning, {item}, find_new_param fail')
+            if log_out:
+                print(f'warning, {item}, find_new_param fail')
             continue
+        if tmp.shape != w[item].shape:
+            tmp = tmp.T
+            if log_out:
+                print(f'transpose {item}')
         w[item] = tmp
     np.savez(weight_file_name, **w)
 
@@ -651,14 +664,19 @@ def update_model_param(model, model_name='sophgo_mq_qmodel', chip= 'CV183X', out
         f.write("# op_name    threshold    min    max\n")
         weight_scale = []
         int4_th = []
+        from sophgo_mq.prepare_by_platform import ParamsTable
+        a_quant_min = ParamsTable[chip]['a_qscheme'].to_observer_params()['quant_min'] 
+        a_quant_max = ParamsTable[chip]['a_qscheme'].to_observer_params()['quant_max'] 
         for name, value in blob_range.items():
             unique_id = value['param_id']['step']
-            print(f'blob_range, update {name}, unique_id:{unique_id}')
+            if log_out:
+                print(f'blob_range, update {name}, unique_id:{unique_id}')
             step =  find_new_param(module_tmp, unique_id)
             if 'threshold' in value:
-                threshold = float(step[0]*128)
-                v_min = float(step[0]*-128)
-                v_max = float(step[0]*127)
+                assert len(step) == 1
+                threshold = float(step[0]*max(-a_quant_min, a_quant_max))
+                v_min = float(step[0]*a_quant_min)
+                v_max = float(step[0]*a_quant_max)
                 tmpstr = "{} {:.7f} {:.7f} {:.7f}\n".format(name[:-2], threshold, v_min, v_max)
                 if name.endswith('_4'):
                     int4_th.append(tmpstr)
@@ -667,7 +685,7 @@ def update_model_param(model, model_name='sophgo_mq_qmodel', chip= 'CV183X', out
                 else:
                     f.write("{} {:.7f} {:.7f} {:.7f}\n".format(name, threshold, v_min, v_max))
             else:
-                tmpstr = "{} {} {} {} {}\n".format(name, len(value['step']), ' '.join([str(i) for i in step]),
+                tmpstr = "{} {} {} {} {}\n".format(name, len(value['step']), ' '.join(['{:.7f}'.format(i) for i in step]),
                         len(value['zero_point']), ' '.join([str(i) for i in value['zero_point']]))
                 if name.endswith('_weight') or name.endswith('_bias'):
                     weight_scale.append(tmpstr)
@@ -679,7 +697,7 @@ def update_model_param(model, model_name='sophgo_mq_qmodel', chip= 'CV183X', out
         f.write('#weight_scale\n')
         for i in weight_scale:
             f.write(i)
-    lower_net(model_name, chip, output_path)
+    lower_net(model_name, chip, output_path, log_out)
 
 def export_onnx_with_fakequant_node(model: GraphModule, net_type='CNN',
                    input_shape_dict=None, dummy_input=None, output_path='./',

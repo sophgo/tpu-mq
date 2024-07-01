@@ -11,7 +11,7 @@ from torch.fx import Tracer
 from torch.fx.graph_module import GraphModule
 from torch.quantization.quantize_fx import _swap_ff_with_fxff
 from torch.quantization import QConfig
-from sophgo_mq.convert_deploy import convert_deploy, param_to_idx_dict, convert_merge_bn
+from sophgo_mq.convert_deploy import convert_deploy, param_to_idx_dict, convert_merge_bn, deepcopy_graphmodule
 from sophgo_mq.utils.utils import generate_random_string
 
 from sophgo_mq.fake_quantize import (
@@ -51,9 +51,6 @@ from sophgo_mq.fuser_method_mappings import fuse_custom_config_dict
 from sophgo_mq.utils.logger import logger
 from sophgo_mq.utils.registry import DEFAULT_MODEL_QUANTIZER
 from sophgo_mq.scheme import QuantizeScheme
-import sophgo_mq.nn.intrinsic.qat as qnniqat
-
-first_call_in = True
 
 __all__ = ['prepare_by_platform']
 
@@ -602,6 +599,7 @@ def prepare_by_platform(
     quant_dict = prepare_custom_config_dict.get('quant_dict')
     chip=quant_dict['chip']
     strategy=quant_dict['strategy']
+    not_dynamic_update_param = False if 'not_dynamic_update_param' not in quant_dict else quant_dict['not_dynamic_update_param']
     logger.info("Quantize model Scheme: {} Mode: {}".format(quant_dict['strategy'], model_mode))
     qconfig = get_qconfig_by_platform(quant_dict, extra_qconfig_dict)
 
@@ -667,29 +665,27 @@ def prepare_by_platform(
                 if inspect.ismethod(_attr):
                     _attr = types.MethodType(getattr(_type, attr_name), cur_module)
                 setattr(cur_module, attr_name, _attr)
-    global first_call_in
-    if first_call_in:
+    if not not_dynamic_update_param:
         print('>>>Gets the mapping between the pytorch param parameter and the parameter to be updated in the tpu-mlir...')
-        module_tmp = copy.deepcopy(prepared)
-        for images, _ in val_loader:
-            if cuda is not None:
-                images = images.cuda(cuda, non_blocking=True)
-            torch.cuda.set_device(cuda)
-            module_tmp = module_tmp.cuda(cuda)
-            module_tmp(images)
-            break
+        module_tmp = deepcopy_graphmodule(prepared)
+        module_tmp = module_tmp.cuda(cuda)
+        module_tmp.eval()
+        images = torch.zeros(*list(input_shape_dict.values())[0], device='cuda')
+        module_tmp(images)
+        
         idx = 100
         convert_merge_bn(module_tmp.eval())
         global param_to_idx_dict
         for name, param in module_tmp.named_parameters():
+            param = param.view(-1)
+            old_data0 = copy.deepcopy(param.data[0])
             param.data[0] = idx
             unique_id = generate_random_string(30)
-            print(f'prepare_by_platform, name: {name}, data0:{idx}, unique_id: {unique_id}')
+            print(f'prepare_by_platform, name: {name}, data0:{idx}, unique_id: {unique_id}, old_data0:{old_data0}')
             param_to_idx_dict[name] = [idx,unique_id]
             idx = idx + 1
         convert_deploy(module_tmp, net_type, input_shape_dict=input_shape_dict,
             model_name='{}'.format(arch), not_gen_bmodel = True,
-            output_path='/tmp/', bf16_mix_prec = False, deploy=False, chip=chip, val_loader=val_loader)
-        first_call_in = False
+            output_path='/tmp/', bf16_mix_prec = False, deploy=False, chip=chip)
         print('>>>Gets the mapping, end')
     return prepared
