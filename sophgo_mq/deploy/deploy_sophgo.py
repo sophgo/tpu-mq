@@ -402,6 +402,7 @@ class LinearQuantizer_process(object):
                         #                                 }
                         continue
                     tensor_name, scale, zero_point, qmin, qmax, dtype, quant_type = self.parse_qparams(node, name2data, quant_type_dict)
+                    print(f'tensor_name:{tensor_name}, scale:{scale[0]}')
                     scale_id = self.find_param_map(scale[0])
                     zero_point_id = self.find_param_map(zero_point[0])
                     bits = 4 if qmax == 7 else 8

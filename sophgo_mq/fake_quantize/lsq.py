@@ -25,6 +25,7 @@ class LearnableFakeQuantize(QuantizeBase):
         # Check whether the module will load a state dict;
         # Initialize the shape of per-channel 'scale' and 'zero-point' before copying values
         self.load_state_dict_hook = PerChannelLoadHook(self)
+        self.log_filter = False
 
     @torch.jit.export
     def extra_repr(self):
@@ -42,6 +43,8 @@ class LearnableFakeQuantize(QuantizeBase):
         if self.observer_enabled[0] == 1:# or self.only_enable_observer:
             self.activation_post_process(X.detach())
             _scale, _zero_point = self.activation_post_process.calculate_qparams()
+            if self.log_filter:
+                print(f'_scale:{_scale}, _zero_point:{_zero_point}')
             _scale = _scale.to(self.scale.device)
             _zero_point = _zero_point.to(self.zero_point.device)
 
