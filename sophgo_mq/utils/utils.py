@@ -2,6 +2,7 @@ import copy
 import os
 import torch
 import random
+import difflib
 import torch.fx
 from torch.fx import GraphModule
 from torch.nn import Module
@@ -21,6 +22,18 @@ except (ModuleNotFoundError, AssertionError):
 def generate_random_string(length):
     chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
     return ''.join(random.choices(chars, k=length))
+ 
+def compare_files(idx, file1, file2):
+    with open(file1, 'r') as f1, open(file2, 'r') as f2:
+        text1 = f1.readlines()
+        text2 = f2.readlines()
+    diff = difflib.HtmlDiff()
+    result = diff.make_file(text1, text2)
+    try:
+        with open(f'result_compare_{idx}.html', 'w', encoding='utf-8') as result_file:
+            result_file.write(result)
+    except IOError as error:
+        print(error)
 
 def sync_tensor(tensor):
     global USE_LINK

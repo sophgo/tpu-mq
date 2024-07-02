@@ -27,13 +27,14 @@ import torch.utils.data.distributed
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
-from sophgo_mq.convert_deploy import convert_deploy, deepcopy_graphmodule, export_onnx_with_fakequant_node, update_model_param, convert_merge_bn
+from sophgo_mq.convert_deploy import convert_deploy, convert_deploy_debug, deepcopy_graphmodule, export_onnx_with_fakequant_node, update_model_param, convert_merge_bn
 from sophgo_mq.prepare_by_platform import prepare_by_platform
 from sophgo_mq.utils.state import enable_calibration, enable_quantization, disable_all
-from sophgo_mq.utils.utils import generate_random_string
+from sophgo_mq.utils.utils import generate_random_string, compare_files
 from sophgo_mq.fake_quantize.lsq import  LearnableFakeQuantize
 from tools.model_runner import mlir_inference
 import pymlir
+
 
 model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
@@ -618,7 +619,7 @@ def get_node_input_by_module_name(qname, model):
         return scale_name[:len(scale_name)-len(post_str)]
     else:
         return ''
-    
+
 def train(train_loader, model, criterion, criterion_cpu, optimizer, epoch, args, mlir_model_path, val_loader, output_names):
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
@@ -629,9 +630,9 @@ def train(train_loader, model, criterion, criterion_cpu, optimizer, epoch, args,
         top5 = AverageMeter('Acc@5', ':6.2f')
         meters.extend([losses, top1, top5])
     if args.use_tpu_mlir_fwd:
-        loss2es = AverageMeter('Loss2', ':.4e')
-        top1_2 = AverageMeter('Acc@1_2', ':6.2f')
-        top5_2 = AverageMeter('Acc@5_2', ':6.2f')
+        loss2es = AverageMeter('tpu Loss', ':.4e')
+        top1_2 = AverageMeter('tpu Acc@1', ':6.2f')
+        top5_2 = AverageMeter('tpu Acc@5', ':6.2f')
         meters.extend([loss2es, top1_2, top5_2])
     progress = ProgressMeter(
         len(train_loader),
@@ -652,6 +653,7 @@ def train(train_loader, model, criterion, criterion_cpu, optimizer, epoch, args,
     s_time = time.time()
     for idx, (images, target) in enumerate(train_loader):
         # measure data loading time
+        print(f'>>>>>>>>>>>new iteration start')
         batch_size = images.size(0)
         if batch_size< args.batch_size:
             continue
@@ -659,9 +661,37 @@ def train(train_loader, model, criterion, criterion_cpu, optimizer, epoch, args,
         if args.use_tpu_mlir_fwd:
             s0 = time.time()
             if 'not_dynamic_update_param' not in args.debug_cmd:
+                w = {}
+                if 'compare_all_iter' in args.debug_cmd:
+                    module_tmp = deepcopy_graphmodule(model)
+                    convert_merge_bn(module_tmp.eval()) 
+                    for name, param in module_tmp.named_parameters():
+                        w[name] = param.cpu().detach().numpy()
+                    named_para = f'model_named_para_idx{idx}.npz'
+                    with open(named_para, 'wb') as f:
+                        np.savez(f, **w)
+                        f.flush()
+
                 print(f'>>> update_model_param start')
-                update_model_param(model, args.arch, args.chip, args.output_path, 'update_model_param_log' in args.debug_cmd)
+                weight_file_copyed = update_model_param(model, args.arch, args.chip, args.output_path, 'update_model_param_log' in args.debug_cmd, idx)
                 print(f'update_model_param time:{time.time() - s0}')
+                 
+                if 'compare_all_iter' in args.debug_cmd:
+                    print(f'>>> convert_deploy_debug start')
+                    convert_deploy_debug(model.eval(), 'CNN', input_shape_dict=
+                        {'data': [args.batch_size, 3, 224, 224]},
+                        model_name=f'{args.arch}_ref_idx{idx}',
+                        output_path='./refdata/', bf16_mix_prec = args.bf16_mix_prec, not_gen_bmodel = True,
+                        deploy = True, val_loader = val_loader, chip = args.chip)
+                    print(f'>>> convert_deploy_debug compare')
+                    cmd_str = f"npz_tool.py compare {weight_file_copyed} {named_para} --fuzzy_match"
+                    print('cmd_str:', cmd_str)
+                    os.system(cmd_str)
+                    cmd_str = f"npz_tool.py compare mobilenet_v2_ref_idx{idx}_qat_top_f32_all_origin_weight.npz {weight_file_copyed} -vv"
+                    print('cmd_str:', cmd_str)
+                    os.system(cmd_str)
+                    cali_table = os.path.join(args.output_path, '{}_cali_table_from_sophgo_mq_sophgo_tpu'.format(args.arch))
+                    compare_files(idx, f"refdata/mobilenet_v2_ref_idx{idx}_cali_table_from_sophgo_mq_sophgo_tpu", cali_table)
             else:
                 mlir_model_path = convert_deploy(model.eval(), 'CNN', input_shape_dict=
                     {'data': [batch_size, 3, 224, 224]},
@@ -720,12 +750,12 @@ def train(train_loader, model, criterion, criterion_cpu, optimizer, epoch, args,
         if args.use_tpu_mlir_fwd:
             print('loss:', loss, 'loss_2:', loss_2, 'copy to loss')
             loss.data.copy_(loss_2)
-            print('loss:', loss_2)
+            print('loss:', loss)
 
         # compute gradient and do SGD step
-        optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        optimizer.zero_grad()
 
         # measure elapsed time
         batch_time.update(time.time() - end)
@@ -740,7 +770,7 @@ def train(train_loader, model, criterion, criterion_cpu, optimizer, epoch, args,
         #     if sum > 0:
         #         print(param[0], 'has Nan', param[1].shape, 'sum:', sum)
 
-        if 'run_1_time' in args.debug_cmd:
+        if f'run_{idx}_time' in args.debug_cmd:
             exit(0)
 
         if args.fast_test:
@@ -759,9 +789,9 @@ def validate(val_loader, model, criterion, args, criterion_cpu = None, force_use
         top5 = AverageMeter('Acc@5', ':6.2f')
         meters.extend([losses, top1, top5])
     if args.use_tpu_mlir_fwd and not force_use_gpu:
-        losses_2 = AverageMeter('Loss_2', ':.4e')
-        top1_2 = AverageMeter('Acc@1_2', ':6.2f')
-        top5_2 = AverageMeter('Acc@5_2', ':6.2f')
+        losses_2 = AverageMeter('tpu Loss', ':.4e')
+        top1_2 = AverageMeter('tpu Acc@1', ':6.2f')
+        top5_2 = AverageMeter('tpu Acc@5', ':6.2f')
         meters.extend([losses_2, top1_2, top5_2])
     progress = ProgressMeter(
         len(val_loader),

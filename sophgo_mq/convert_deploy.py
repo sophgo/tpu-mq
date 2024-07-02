@@ -466,6 +466,7 @@ def get_quant_type_from_fakequant_type(model: GraphModule):
 
     return quant_type_dict
 
+
 def convert_deploy(model: GraphModule, net_type='CNN',
                    input_shape_dict=None, dummy_input=None, output_path='./',
                    model_name='sophgo_mq_qmodel', deploy_to_qlinear=False, deploy=False, chip="BM1690", val_loader=None, **extra_kwargs):
@@ -590,6 +591,93 @@ def convert_deploy(model: GraphModule, net_type='CNN',
         print(f'model_deploy time:{time.time() - s0}')
         return f'./{model_name}_qat_{chip.lower()}_{quantize_str}_tpu.mlir'
 
+def convert_deploy_debug(model: GraphModule, net_type='CNN',
+                   input_shape_dict=None, dummy_input=None, output_path='./',
+                   model_name='sophgo_mq_qmodel', deploy_to_qlinear=False, deploy=False, chip="BM1690", val_loader=None, **extra_kwargs):
+    r"""Convert model to onnx model and quantization params depends on backend.
+
+    Args:
+        model (GraphModule): GraphModule prepared qat module.
+        backend_type (BackendType): specific which backend should be converted to.
+        input_shape_dict (dict): keys are model input name(should be forward function
+                                 params name, values are list of tensor dims)
+        output_path (str, optional): path to save convert results. Defaults to './'.
+        model_name (str, optional): name of converted onnx model. Defaults to 'sophgo_mq_qmodel'.
+
+    >>> note on input_shape_dict:
+        example: {'input_0': [1, 3, 224, 224]
+                'input_1': [1, 3, 112, 112]
+                }
+        while forward function signature is like:
+                def forward(self, input_0, input_1):
+                    pass
+    """
+    batch_size = next(iter(input_shape_dict.values()))[0]
+    quant_type_dict = get_quant_type_from_fakequant_type(model)
+    kwargs = {
+        'input_shape_dict': input_shape_dict,
+        'dummy_input': dummy_input,
+        'output_path': output_path,
+        'model_name': model_name,
+        'onnx_model_path': osp.join(output_path, '{}.onnx'.format(model_name)),
+        'deploy_to_qlinear': deploy_to_qlinear,
+        'quant_type_dict': quant_type_dict
+    }
+    kwargs.update(extra_kwargs)
+    deploy_model = deepcopy_graphmodule(model)
+    for convert_function in NET_DEPLOY_FUNCTION[net_type]:
+        s0 = time.time()
+        convert_function(deploy_model, **kwargs)
+        print(f'convert_function:{convert_function.__name__}, time:{time.time() - s0}')
+
+    if deploy and chip != 'academic':
+        if val_loader == None:
+            print(f'VAL Loader not set for deploy!')
+            return
+        export_to_mm = 'not_gen_bmodel' in kwargs and kwargs['not_gen_bmodel']
+        mlir_scale = '1,1,1'
+        mlir_mean = '0,0,0'
+        transforms = val_loader.dataset.transform.transforms
+        for i, transform in enumerate(transforms):
+            if isinstance(transform, TorchTransforms.Normalize) and isinstance(transforms[i - 1], TorchTransforms.ToTensor):
+                mean_np = np.array(transform.mean)
+                std_np = np.array(transform.std)
+                mlir_scale=1/(255*std_np)
+                mlir_mean=mean_np/(std_np*mlir_scale)
+                mlir_scale = ','.join([str(round(i,4)) for i in mlir_scale.tolist()])
+                mlir_mean = ','.join([str(round(i,4)) for i in mlir_mean.tolist()])
+                print('mlir_mean:', mlir_mean, 'mlir_scale:', mlir_scale)
+
+        if not export_to_mm:
+            onnx_filename = os.path.join(output_path, '{}_deploy_model.onnx'.format(model_name))
+        else:
+            global model_onnx_mem
+            onnx_filename = model_onnx_mem
+        shape_str_list = []
+        for name in input_shape_dict:
+            shape_str = ','.join([str(i) for i in input_shape_dict[name]])
+            shape_str_list.append(f'[{shape_str}]')
+        shape_str_list = ','.join(shape_str_list)
+        if export_to_mm:
+            s0 = time.time()
+            model_transform_func(f'{model_name}_qat', 
+                                onnx_filename, list(input_shape_dict.values()), 
+                                mlir_scale, mlir_mean,
+                                f'{model_name}_qat.mlir')
+            print(f'model_transform_func time:{time.time() - s0}')
+        else:
+            cmd_str = f"model_transform.py \
+            --model_name {model_name}_qat \
+            --model_def {onnx_filename} \
+            --input_shapes [{shape_str_list}] \
+            --mean {mlir_scale} \
+            --scale {mlir_mean} \
+            --keep_aspect_ratio \
+            --pixel_format rgb --debug \
+            --mlir {model_name}_qat.mlir"
+            print('model_transform cmd_str:', cmd_str)
+            os.system(cmd_str)
+
 def lower_net(model_name, chip, output_path, log_out = False):
     cali_table = os.path.join(output_path, '{}_cali_table_from_sophgo_mq_sophgo_tpu'.format(model_name))
     cmd_str = f"tpuc-opt {model_name}_qat_origin.mlir --shape-infer --canonicalize --extra-optimize -o {model_name}_qat.mlir"
@@ -619,11 +707,27 @@ def find_new_param(model, unique_id, log_out = False):
             if log_out:
                 print(f'find torch name:{name}, shape:{tmp.shape}, old_data0:{tmp.reshape(-1)[0]}')
             return tmp
+        
+def clip_weight(data, scale, ConvTranspose):
+    clip_range_min = ((-127 - 0) * scale).astype(data.dtype)
+    clip_range_max = ((127 - 0) * scale).astype(data.dtype)
+    if len(scale.shape) > 0 and scale.shape[0] > 1:
+        new_data = []
+        if ConvTranspose:
+            data = data.transpose(1, 0, 2, 3)
+        for c in range(data.shape[0]):
+            new_data.append(np.clip(data[c], clip_range_min[c], clip_range_max[c]))
+        new_data = np.array(new_data)
+        if ConvTranspose:
+            new_data = new_data.transpose(1, 0, 2, 3)
+    else:
+        new_data = np.clip(data, clip_range_min, clip_range_max)
+    return torch.from_numpy(new_data)
 
-def update_model_param(model, model_name='sophgo_mq_qmodel', chip= 'CV181X', output_path='./', log_out = False):
+def update_model_param(model, model_name='sophgo_mq_qmodel', chip= 'CV181X', output_path='./', log_out = False, idx = -1):
     parser=MlirParser(f'{model_name}_qat_origin.mlir')
-    weight_file_name = parser.module_weight_file    
-    w_ = np.load(weight_file_name)
+    weight_file = parser.module_weight_file    
+    w_ = np.load(weight_file)
     w = {}
     for k in w_:
         w[k] = w_[k]
@@ -640,7 +744,7 @@ def update_model_param(model, model_name='sophgo_mq_qmodel', chip= 'CV181X', out
                 if log_out:
                     print(f'warning, {item} not in weight_name_to_unique_id')
                 continue
-        unique_id = weight_name_to_unique_id[item2]
+        unique_id = weight_name_to_unique_id[item2][0]
         if log_out:
             print(f'update {item}, unique_id:{unique_id}')
         tmp = find_new_param(module_tmp, unique_id)
@@ -653,7 +757,6 @@ def update_model_param(model, model_name='sophgo_mq_qmodel', chip= 'CV181X', out
             if log_out:
                 print(f'transpose {item}')
         w[item] = tmp
-    np.savez(weight_file_name, **w)
 
     file_h = open('/tmp/{}_clip_ranges.json'.format(model_name), "r")
     blob_range = json.loads(file_h.read())["sophgo_tpu"]
@@ -672,6 +775,10 @@ def update_model_param(model, model_name='sophgo_mq_qmodel', chip= 'CV181X', out
             if log_out:
                 print(f'blob_range, update {name}, unique_id:{unique_id}')
             step =  find_new_param(module_tmp, unique_id)
+            for weight_name in weight_name_to_unique_id:
+                if weight_name_to_unique_id[weight_name][1] == unique_id:
+                    weight_data = find_new_param(module_tmp, weight_name_to_unique_id[weight_name][0])
+                    w[weight_name] = clip_weight(weight_data, step, weight_name_to_unique_id[weight_name][2])
             if 'threshold' in value:
                 assert len(step) == 1
                 threshold = float(step[0]*max(-a_quant_min, a_quant_max))
@@ -697,7 +804,17 @@ def update_model_param(model, model_name='sophgo_mq_qmodel', chip= 'CV181X', out
         f.write('#weight_scale\n')
         for i in weight_scale:
             f.write(i)
+        os.fsync(f.fileno())
+
+    with open(weight_file, 'wb') as f:
+        np.savez(f, **w)
+        f.flush()
+    weight_file_copyed = f'idx{idx}_{weight_file}'
+    if idx >= 0:
+        os.system(f'cp -f {weight_file} {weight_file_copyed}')
+
     lower_net(model_name, chip, output_path, log_out)
+    return weight_file_copyed
 
 def export_onnx_with_fakequant_node(model: GraphModule, net_type='CNN',
                    input_shape_dict=None, dummy_input=None, output_path='./',

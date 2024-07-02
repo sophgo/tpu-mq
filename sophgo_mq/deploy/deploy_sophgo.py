@@ -253,7 +253,7 @@ class LinearQuantizer_process(object):
             graph.node.remove(node)
         return
 
-    def process_param_map(self, node, named_initializer, inp2node, out2node, weight_name_to_unique_id_dict, weight_tensor_name):
+    def process_param_map(self, node, named_initializer, inp2node, out2node, weight_name_to_unique_id_dict, weight_tensor_name, scale_id):
         global first_call_in
         if not first_call_in:
             return
@@ -263,15 +263,19 @@ class LinearQuantizer_process(object):
                 for inp in _node.input:
                     return find_weight(inp)
             return tensor
-                
+
+        ConvTranspose = False
+        next_node = inp2node[node.output[0]]
+        if len(next_node) == 1 and next_node[0][0].op_type == 'ConvTranspose':
+            ConvTranspose = True
         weight = node.input[0] if node.input[0] in named_initializer else find_weight(node.input[0])
         tmp = numpy_helper.to_array(named_initializer[weight])
         print(f'weight_shape:{tmp.shape}, first_call_in:{first_call_in}')
         weight_data0 = tmp.reshape(-1)[0]
         print(f'weight_data0:{weight_data0}')
         tmp = self.find_param_map(weight_data0)
-        weight_name_to_unique_id_dict[weight_tensor_name] = tmp
-        print(f'weight_name_to_unique_id_dict, weight_name:{weight_tensor_name}, unique_id: {tmp}')
+        weight_name_to_unique_id_dict[weight_tensor_name] = [tmp, scale_id, ConvTranspose]
+        print(f'weight_name_to_unique_id_dict, weight_name:{weight_tensor_name}, unique_id: {[tmp, scale_id, ConvTranspose]}')
     
         next_nodes = inp2node[node.output[0]]
         assert len(next_nodes) == 1
@@ -281,7 +285,7 @@ class LinearQuantizer_process(object):
             bias_data0 = numpy_helper.to_array(named_initializer[bias_name]).reshape(-1)[0]
             print(f'bias_data0:{bias_data0}')
             tmp = self.find_param_map(bias_data0)
-            weight_name_to_unique_id_dict[bias_name] = tmp
+            weight_name_to_unique_id_dict[bias_name] = [tmp,None,False]
             print(f'weight_name_to_unique_id_dict, bias_name:{bias_name}, unique_id: {tmp}')
             
     def find_param_map(self, data0):
@@ -333,9 +337,9 @@ class LinearQuantizer_process(object):
                 nodes_to_be_removed.extend(redundant_nodes)
                 self.clip_weight(node, name2data, inp2node, named_initializer, quant_type_dict)
                 tensor_name, scale, zero_point, qmin, qmax, dtype, quant_type = self.parse_qparams(node, name2data, quant_type_dict)
-                self.process_param_map(node, named_initializer, inp2node, out2node, weight_name_to_unique_id_dict, tensor_name)
                 scale_id = self.find_param_map(scale[0])
                 zero_point_id = self.find_param_map(zero_point[0])
+                self.process_param_map(node, named_initializer, inp2node, out2node, weight_name_to_unique_id_dict, tensor_name, scale_id)
                 #卷积权重per-channel量化参数，bias的per-chan量化参数没有去调优
                 if len(next_nodes) == 1 and next_nodes[0][0].op_type in ['Gemm', 'Conv']:#当前伪量化节点只有1个后继，且第1个后继节点为conv类型
                     next_node_output = next_nodes[0][0].output[0]
@@ -362,9 +366,9 @@ class LinearQuantizer_process(object):
                     # fake quantize for weights
                     redundant_nodes = self.deal_with_weight_fakequant(node, out2node, inp2node, named_initializer)
                     tensor_name, scale, zero_point, qmin, qmax, dtype, quant_type = self.parse_qparams(node, name2data, quant_type_dict)
-                    self.process_param_map(node, named_initializer, inp2node, out2node, weight_name_to_unique_id_dict, tensor_name)
                     scale_id = self.find_param_map(scale[0])
                     zero_point_id = self.find_param_map(zero_point[0])
+                    self.process_param_map(node, named_initializer, inp2node, out2node, weight_name_to_unique_id_dict, tensor_name, scale_id)
                     nodes_to_be_removed.extend(redundant_nodes)
                     self.clip_weight(node, name2data, inp2node, named_initializer, quant_type_dict)
                     assert next_nodes[0][0].op_type in ['Gemm', 'Conv']
