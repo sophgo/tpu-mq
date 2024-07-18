@@ -27,7 +27,7 @@ import torch.utils.data.distributed
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
-from sophgo_mq.convert_deploy import convert_deploy, convert_deploy_debug, deepcopy_graphmodule, export_onnx_with_fakequant_node, update_model_param, convert_merge_bn
+from sophgo_mq.convert_deploy import convert_deploy, deepcopy_graphmodule, export_onnx_with_fakequant_node, update_model_param, convert_merge_bn
 from sophgo_mq.prepare_by_platform import prepare_by_platform
 from sophgo_mq.utils.state import enable_calibration, enable_quantization, disable_all
 from sophgo_mq.utils.utils import generate_random_string, compare_files
@@ -126,6 +126,7 @@ def main():
         args.output_path=os.path.join(args.output_path, args.arch+'_fp8_e5m2')
     else:
         args.output_path=os.path.join(args.output_path, args.arch)
+        args.output_path=args.output_path+'/'
     os.system('mkdir -p {}'.format(args.output_path))
 
     args.quant = not args.not_quant
@@ -476,7 +477,7 @@ def main_worker(gpu, ngpus_per_node, args):
             del module_tmp2
             gen_test_ref_data(cali_loader, model, args)
             convert_deploy(model.eval(), input_shape_dict={'data': [args.deploy_batch_size, 3, 224, 224]},
-                model_name='{}'.format(args.arch), output_path=args.output_path, deploy=True, chip=args.chip, val_loader=val_loader)
+                model_name='{}'.format(args.arch), output_path=args.output_path, mlir_deploy=True, chip=args.chip, val_loader=val_loader)
         exit(0)
 
     if args.fast_test:
@@ -487,7 +488,7 @@ def main_worker(gpu, ngpus_per_node, args):
         {'data': [args.batch_size, 3, 224, 224]},
         model_name='{}'.format(args.arch),
         output_path=args.output_path, bf16_mix_prec = args.bf16_mix_prec, not_gen_bmodel = True,
-        deploy = True, val_loader = val_loader, chip = args.chip)
+        mlir_deploy = True, val_loader = val_loader, chip = args.chip)
     mlir_cuda = pymlir.cuda()
     mlir_cuda.load(mlir_model_path)
     output_names = mlir_cuda.output_names
@@ -515,7 +516,7 @@ def main_worker(gpu, ngpus_per_node, args):
     convert_deploy(model.eval(), 'CNN', input_shape_dict=
         {'data': [args.deploy_batch_size, 3, 224, 224]},
         model_name='{}'.format(args.arch),
-        output_path=args.output_path, bf16_mix_prec = args.bf16_mix_prec, deploy=True, chip=args.chip, val_loader=val_loader)
+        output_path=args.output_path, bf16_mix_prec = args.bf16_mix_prec, mlir_deploy=True, chip=args.chip, val_loader=val_loader)
 
 def prepare_dataloader(args):
     traindir = os.path.join(args.train_data, 'train')
@@ -653,7 +654,7 @@ def train(train_loader, model, criterion, criterion_cpu, optimizer, epoch, args,
     s_time = time.time()
     for idx, (images, target) in enumerate(train_loader):
         # measure data loading time
-        print(f'>>>>>>>>>>>new iteration start')
+        print(f'\n>>>>>>>>>>>new iteration start {idx}')
         batch_size = images.size(0)
         if batch_size< args.batch_size:
             continue
@@ -673,17 +674,20 @@ def train(train_loader, model, criterion, criterion_cpu, optimizer, epoch, args,
                         f.flush()
 
                 print(f'>>> update_model_param start')
-                weight_file_copyed = update_model_param(model, args.arch, args.chip, args.output_path, 'update_model_param_log' in args.debug_cmd, idx)
+                save_all_iter_weights = False
+                if 'compare_all_iter' in args.debug_cmd:
+                    save_all_iter_weights = True
+                weight_file_copyed = update_model_param(model, model_name = args.arch, chip = args.chip, output_path = args.output_path, log_out = 'update_model_param_log' in args.debug_cmd, idx = idx, save_all_iter_weight = save_all_iter_weights)
                 print(f'update_model_param time:{time.time() - s0}')
                  
                 if 'compare_all_iter' in args.debug_cmd:
-                    print(f'>>> convert_deploy_debug start')
-                    convert_deploy_debug(model.eval(), 'CNN', input_shape_dict=
+                    print(f'>>> convert_deploy debug_onlytransform start')
+                    convert_deploy(model.eval(), 'CNN', input_shape_dict=
                         {'data': [args.batch_size, 3, 224, 224]},
                         model_name=f'{args.arch}_ref_idx{idx}',
                         output_path='./refdata/', bf16_mix_prec = args.bf16_mix_prec, not_gen_bmodel = True,
-                        deploy = True, val_loader = val_loader, chip = args.chip)
-                    print(f'>>> convert_deploy_debug compare')
+                        mlir_deploy = True, val_loader = val_loader, chip = args.chip, mlir_deploy_debug_onlytransform=True)
+                    print(f'>>> convert_deploy debug_onlytransform compare')
                     cmd_str = f"npz_tool.py compare {weight_file_copyed} {named_para} --fuzzy_match"
                     print('cmd_str:', cmd_str)
                     os.system(cmd_str)
@@ -697,7 +701,7 @@ def train(train_loader, model, criterion, criterion_cpu, optimizer, epoch, args,
                     {'data': [batch_size, 3, 224, 224]},
                     model_name='{}'.format(args.arch),
                     output_path=args.output_path, bf16_mix_prec = args.bf16_mix_prec, not_gen_bmodel = True,
-                    deploy = True, val_loader = val_loader, chip = args.chip)                
+                    mlir_deploy = True, val_loader = val_loader, chip = args.chip)                
                 print(f'convert_deploy time:{time.time() - s0}')
             target = target.cpu()
             inputs['data'] = images.cpu().numpy()
@@ -803,7 +807,7 @@ def validate(val_loader, model, criterion, args, criterion_cpu = None, force_use
             {'data': [args.batch_size, 3, 224, 224]},
             model_name='{}'.format(args.arch),
             output_path=args.output_path, bf16_mix_prec = args.bf16_mix_prec, 
-            deploy = True, val_loader = val_loader, chip = args.chip)
+            mlir_deploy = True, val_loader = val_loader, chip = args.chip)
         mlir_cuda = pymlir.cuda()
         mlir_cuda.load(mlir_model_path)
         output_names = mlir_cuda.output_names

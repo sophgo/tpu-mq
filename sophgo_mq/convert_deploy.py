@@ -53,6 +53,9 @@ from tools.model_transform import model_transform_func
 import torchvision.transforms as TorchTransforms
 from utils.mlir_parser import MlirParser
 
+import subprocess
+import shlex 
+
 FP8_FAKEQUANTIZER = [E4M3FakeQuantize, E5M2FakeQuantize]
 FP4_FAKEQUANTIZER = [FP4FakeQuantize, GPTQFP4FakeQuantize, FP4GROUPFakeQuantize, FP4GROUPFakeQuantize1]
 INT_FAKEQUANTIZER = [LearnableFakeQuantize, NNIEFakeQuantize, FixedFakeQuantize, DoReFaFakeQuantize, DSQFakeQuantize, PACTFakeQuantize,\
@@ -469,7 +472,7 @@ def get_quant_type_from_fakequant_type(model: GraphModule):
 
 def convert_deploy(model: GraphModule, net_type='CNN',
                    input_shape_dict=None, dummy_input=None, output_path='./',
-                   model_name='sophgo_mq_qmodel', deploy_to_qlinear=False, deploy=False, chip="BM1690", val_loader=None, **extra_kwargs):
+                   model_name='sophgo_mq_qmodel', deploy_to_qlinear=False, mlir_deploy=False, chip="BM1690", val_loader=None, **extra_kwargs):
     r"""Convert model to onnx model and quantization params depends on backend.
 
     Args:
@@ -506,7 +509,7 @@ def convert_deploy(model: GraphModule, net_type='CNN',
         convert_function(deploy_model, **kwargs)
         print(f'convert_function:{convert_function.__name__}, time:{time.time() - s0}')
 
-    if deploy and chip != 'academic':
+    if mlir_deploy and chip != 'academic':
         if val_loader == None:
             print(f'VAL Loader not set for deploy!')
             return
@@ -541,7 +544,6 @@ def convert_deploy(model: GraphModule, net_type='CNN',
                                 onnx_filename, list(input_shape_dict.values()), 
                                 mlir_scale, mlir_mean,
                                 f'{model_name}_qat.mlir')
-            print(f'model_transform_func time:{time.time() - s0}')
         else:
             cmd_str = f"model_transform.py \
             --model_name {model_name}_qat \
@@ -554,129 +556,67 @@ def convert_deploy(model: GraphModule, net_type='CNN',
             --mlir {model_name}_qat.mlir"
             print('model_transform cmd_str:', cmd_str)
             os.system(cmd_str)
+        work_path = output_path
+        if output_path.startswith('/dev/shm/'):
+            cmd_str = f'cp {model_name}_qat* /dev/shm/'
+            os.system(cmd_str)
+            cmd_str = 'cp input_data_0.npz /dev/shm/'
+            os.system(cmd_str)
+            cmd_str = 'cp layer_outputs_0.npz /dev/shm/'
+            os.system(cmd_str)
+            cmd_str = f'cp {model_name}_cali_table_from_sophgo_mq_sophgo_tpu /dev/shm/'
+            os.system(cmd_str)
+            cmd_str = f'cp {model_name}_q_table_from_sophgo_mq_sophgo_tpu /dev/shm/'
+            os.system(cmd_str)
+            print(f'copy files to {output_path}')
+            os.system(f'ls {output_path}')
+            work_path='/dev/shm/'
 
-        calibration_table = os.path.join(output_path, '{}_cali_table_from_sophgo_mq_sophgo_tpu'.format(model_name))
-        test_input_file = os.path.join(output_path, 'input_data_0.npz')            
-        test_reference_file = os.path.join(output_path, 'layer_outputs_0.npz')
-        quantize_table = ''
-        not_gen_bmodel = ''
-        if export_to_mm:
-            test_input, test_reference = '', ''
-            not_gen_bmodel = '--not_gen_bmodel'
-        else:
-            test_input = f'--test_input {test_input_file}'
-            test_reference = f'--test_reference {test_reference_file}'
-        if batch_size == 1 or not os.path.exists(test_input_file) or not os.path.exists(test_reference_file):
-            test_input, test_reference = '', ''
+        print(f'model_transform_func time:{time.time() - s0}')
 
-        quantize_mode = 'INT8'
-        quantize_str = 'int8_sym'
-        if 'bf16_mix_prec' in kwargs and kwargs['bf16_mix_prec']:
-            quantize_table = os.path.join(output_path, '{}_q_table_from_sophgo_mq_sophgo_tpu'.format(model_name))
-            quantize_table = f'--quantize_table {quantize_table}'
-            quantize_mode = 'BF16'
-            quantize_str = 'bf16'
-        bmodel_ext = 'cvimodel' if chip in ['MARS3', 'CV183X', 'CV182X', 'CV181X', 'CV180X', 'CV186X'] else 'bmodel'
-        cmd_str = f"model_deploy.py \
-        --mlir {model_name}_qat.mlir \
-        --quantize {quantize_mode} \
-        --calibration_table {calibration_table} {quantize_table} \
-        --chip {chip} {test_input} {test_reference}\
-        --fazzy_match \
-        --tolerance 0.99,0.90 --debug {not_gen_bmodel}\
-        --model {model_name}_qat_{chip.lower()}_{quantize_str}.{bmodel_ext}"
-        print('model_deploy cmd_str:', cmd_str)
-        s0 = time.time()
-        os.system(cmd_str)
-        print(f'model_deploy time:{time.time() - s0}')
-        return f'./{model_name}_qat_{chip.lower()}_{quantize_str}_tpu.mlir'
+        if 'mlir_deploy_debug_onlytransform' not in extra_kwargs or extra_kwargs['mlir_deploy_debug_onlytransform'] == False:
+            calibration_table = os.path.join(work_path, '{}_cali_table_from_sophgo_mq_sophgo_tpu'.format(model_name))
+            test_input_file = os.path.join(work_path, 'input_data_0.npz')            
+            test_reference_file = os.path.join(work_path, 'layer_outputs_0.npz')
+            quantize_table = ''
+            not_gen_bmodel = ''
+            if export_to_mm:
+                test_input, test_reference = '', ''
+                not_gen_bmodel = '--not_gen_bmodel'
+            else:
+                test_input = f'--test_input {test_input_file}'
+                test_reference = f'--test_reference {test_reference_file}'
+            if batch_size == 1 or not os.path.exists(test_input_file) or not os.path.exists(test_reference_file):
+                test_input, test_reference = '', ''
 
-def convert_deploy_debug(model: GraphModule, net_type='CNN',
-                   input_shape_dict=None, dummy_input=None, output_path='./',
-                   model_name='sophgo_mq_qmodel', deploy_to_qlinear=False, deploy=False, chip="BM1690", val_loader=None, **extra_kwargs):
-    r"""Convert model to onnx model and quantization params depends on backend.
-
-    Args:
-        model (GraphModule): GraphModule prepared qat module.
-        backend_type (BackendType): specific which backend should be converted to.
-        input_shape_dict (dict): keys are model input name(should be forward function
-                                 params name, values are list of tensor dims)
-        output_path (str, optional): path to save convert results. Defaults to './'.
-        model_name (str, optional): name of converted onnx model. Defaults to 'sophgo_mq_qmodel'.
-
-    >>> note on input_shape_dict:
-        example: {'input_0': [1, 3, 224, 224]
-                'input_1': [1, 3, 112, 112]
-                }
-        while forward function signature is like:
-                def forward(self, input_0, input_1):
-                    pass
-    """
-    batch_size = next(iter(input_shape_dict.values()))[0]
-    quant_type_dict = get_quant_type_from_fakequant_type(model)
-    kwargs = {
-        'input_shape_dict': input_shape_dict,
-        'dummy_input': dummy_input,
-        'output_path': output_path,
-        'model_name': model_name,
-        'onnx_model_path': osp.join(output_path, '{}.onnx'.format(model_name)),
-        'deploy_to_qlinear': deploy_to_qlinear,
-        'quant_type_dict': quant_type_dict
-    }
-    kwargs.update(extra_kwargs)
-    deploy_model = deepcopy_graphmodule(model)
-    for convert_function in NET_DEPLOY_FUNCTION[net_type]:
-        s0 = time.time()
-        convert_function(deploy_model, **kwargs)
-        print(f'convert_function:{convert_function.__name__}, time:{time.time() - s0}')
-
-    if deploy and chip != 'academic':
-        if val_loader == None:
-            print(f'VAL Loader not set for deploy!')
-            return
-        export_to_mm = 'not_gen_bmodel' in kwargs and kwargs['not_gen_bmodel']
-        mlir_scale = '1,1,1'
-        mlir_mean = '0,0,0'
-        transforms = val_loader.dataset.transform.transforms
-        for i, transform in enumerate(transforms):
-            if isinstance(transform, TorchTransforms.Normalize) and isinstance(transforms[i - 1], TorchTransforms.ToTensor):
-                mean_np = np.array(transform.mean)
-                std_np = np.array(transform.std)
-                mlir_scale=1/(255*std_np)
-                mlir_mean=mean_np/(std_np*mlir_scale)
-                mlir_scale = ','.join([str(round(i,4)) for i in mlir_scale.tolist()])
-                mlir_mean = ','.join([str(round(i,4)) for i in mlir_mean.tolist()])
-                print('mlir_mean:', mlir_mean, 'mlir_scale:', mlir_scale)
-
-        if not export_to_mm:
-            onnx_filename = os.path.join(output_path, '{}_deploy_model.onnx'.format(model_name))
-        else:
-            global model_onnx_mem
-            onnx_filename = model_onnx_mem
-        shape_str_list = []
-        for name in input_shape_dict:
-            shape_str = ','.join([str(i) for i in input_shape_dict[name]])
-            shape_str_list.append(f'[{shape_str}]')
-        shape_str_list = ','.join(shape_str_list)
-        if export_to_mm:
+            quantize_mode = 'INT8'
+            quantize_str = 'int8_sym'
+            if 'bf16_mix_prec' in kwargs and kwargs['bf16_mix_prec']:
+                quantize_table = os.path.join(work_path, '{}_q_table_from_sophgo_mq_sophgo_tpu'.format(model_name))
+                quantize_table = f'--quantize_table {quantize_table}'
+                quantize_mode = 'BF16'
+                quantize_str = 'bf16'
+            bmodel_ext = 'cvimodel' if chip in ['MARS3', 'CV183X', 'CV182X', 'CV181X', 'CV180X', 'CV186X'] else 'bmodel'
+            cmd_str = f"model_deploy.py \
+            --mlir {model_name}_qat.mlir \
+            --quantize {quantize_mode} \
+            --calibration_table {calibration_table} {quantize_table} \
+            --chip {chip} {test_input} {test_reference}\
+            --fazzy_match \
+            --tolerance 0.99,0.90 --debug {not_gen_bmodel}\
+            --model {model_name}_qat_{chip.lower()}_{quantize_str}.{bmodel_ext}"
+            print('model_deploy cmd_str:', cmd_str)
             s0 = time.time()
-            model_transform_func(f'{model_name}_qat', 
-                                onnx_filename, list(input_shape_dict.values()), 
-                                mlir_scale, mlir_mean,
-                                f'{model_name}_qat.mlir')
-            print(f'model_transform_func time:{time.time() - s0}')
-        else:
-            cmd_str = f"model_transform.py \
-            --model_name {model_name}_qat \
-            --model_def {onnx_filename} \
-            --input_shapes [{shape_str_list}] \
-            --mean {mlir_scale} \
-            --scale {mlir_mean} \
-            --keep_aspect_ratio \
-            --pixel_format rgb --debug \
-            --mlir {model_name}_qat.mlir"
-            print('model_transform cmd_str:', cmd_str)
-            os.system(cmd_str)
+            if output_path.startswith('/dev/shm/'):
+                cmd_args = shlex.split(cmd_str)
+                p = subprocess.Popen(cmd_args, cwd=output_path)
+                p.wait()
+                print(f'model_deploy time:{time.time() - s0}')
+                return f'{output_path}{model_name}_qat_{chip.lower()}_{quantize_str}_tpu.mlir'
+            else:
+                os.system(cmd_str)
+                print(f'model_deploy time:{time.time() - s0}')
+                return f'{model_name}_qat_{chip.lower()}_{quantize_str}_tpu.mlir'
 
 def lower_net(model_name, chip, output_path, log_out = False):
     cali_table = os.path.join(output_path, '{}_cali_table_from_sophgo_mq_sophgo_tpu'.format(model_name))
@@ -724,14 +664,21 @@ def clip_weight(data, scale, ConvTranspose):
         new_data = np.clip(data, clip_range_min, clip_range_max)
     return torch.from_numpy(new_data)
 
-def update_model_param(model, model_name='sophgo_mq_qmodel', chip= 'CV181X', output_path='./', log_out = False, idx = -1):
+def update_model_param(model, model_name='sophgo_mq_qmodel', chip= 'CV181X', output_path='./', log_out = False, idx = -1, save_all_iter_weight=False):
     parser=MlirParser(f'{model_name}_qat_origin.mlir')
-    weight_file = parser.module_weight_file    
+    weight_file = parser.module_weight_file
+    if not weight_file.startswith('/dev/shm/'):
+        cmd_str = f'cp {weight_file} /dev/shm/'
+        os.system(cmd_str)
+        cmd_str = f'sed -i \'s/{weight_file}/\/dev\/shm\/{weight_file}/\' {model_name}_qat_origin.mlir'
+        print(f'copy to shm before update: {cmd_str}')
+        os.system(cmd_str)
+        weight_file = f'/dev/shm/{weight_file}'
     w_ = np.load(weight_file)
     w = {}
     for k in w_:
         w[k] = w_[k]
-    file_h = open('/tmp/{}_weight_name_to_unique_id.json'.format(model_name), "r")
+    file_h = open('/dev/shm/{}_weight_name_to_unique_id.json'.format(model_name), "r")
     weight_name_to_unique_id = json.loads(file_h.read())
     file_h.close()
     module_tmp = deepcopy_graphmodule(model)
@@ -758,7 +705,7 @@ def update_model_param(model, model_name='sophgo_mq_qmodel', chip= 'CV181X', out
                 print(f'transpose {item}')
         w[item] = tmp
 
-    file_h = open('/tmp/{}_clip_ranges.json'.format(model_name), "r")
+    file_h = open('/dev/shm/{}_clip_ranges.json'.format(model_name), "r")
     blob_range = json.loads(file_h.read())["sophgo_tpu"]
     file_h.close()
     cali_table = osp.join(output_path, '{}_cali_table_from_sophgo_mq_sophgo_tpu'.format(model_name))
@@ -809,12 +756,15 @@ def update_model_param(model, model_name='sophgo_mq_qmodel', chip= 'CV181X', out
     with open(weight_file, 'wb') as f:
         np.savez(f, **w)
         f.flush()
-    weight_file_copyed = f'idx{idx}_{weight_file}'
-    if idx >= 0:
-        os.system(f'cp -f {weight_file} {weight_file_copyed}')
-
     lower_net(model_name, chip, output_path, log_out)
-    return weight_file_copyed
+
+    if save_all_iter_weight:
+        weight_file_copyed = f'idx{idx}_{weight_file}'
+        if idx >= 0:
+            os.system(f'cp -f {weight_file} {weight_file_copyed}')
+        return weight_file_copyed
+    else:
+        return None
 
 def export_onnx_with_fakequant_node(model: GraphModule, net_type='CNN',
                    input_shape_dict=None, dummy_input=None, output_path='./',

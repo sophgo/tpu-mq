@@ -466,7 +466,7 @@ def main_worker(gpu, ngpus_per_node, args):
             del module_tmp2
             gen_test_ref_data(cali_loader, model, args)
             convert_deploy(model.eval(), input_shape_dict={'data': [args.deploy_batch_size, 3, 224, 224]},
-                model_name='{}'.format(args.arch), output_path=args.output_path, deploy=True, chip=args.chip, val_loader=val_loader)
+                model_name='{}'.format(args.arch), output_path=args.output_path, mlir_deploy=True, chip=args.chip, val_loader=val_loader)
         exit(0)
 
     if args.test_mlir:
@@ -516,7 +516,7 @@ def main_worker(gpu, ngpus_per_node, args):
     mlir_model_path = convert_deploy(model.eval(), net_type, input_shape_dict=
         {'data': [args.deploy_batch_size, 3, 224, 224]},
         model_name='{}'.format(args.arch),
-        output_path=args.output_path, bf16_mix_prec = args.bf16_mix_prec, deploy=True, chip=args.chip, val_loader=val_loader)
+        output_path=args.output_path, bf16_mix_prec = args.bf16_mix_prec, mlir_deploy=True, chip=args.chip, val_loader=val_loader)
     validate_for_chip_model(bmodel_test_loader, mlir_model_path, criterion, args)
 
 def prepare_dataloader(args):

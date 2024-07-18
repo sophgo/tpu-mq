@@ -22,6 +22,9 @@ import torch.utils.data
 import torch.utils.data.distributed
 
 from sophgo_mq.convert_deploy import convert_deploy
+from sophgo_mq.convert_deploy import convert_merge_bn
+from sophgo_mq.utils import deepcopy_graphmodule
+from sophgo_mq.utils import generate_random_string
 
 import hashlib
 import copy
@@ -132,7 +135,7 @@ def tpu_train_prepare(model, args, val_loader):
     torch_hash, torch_param = hash_torch(model)
     
     convert_deploy(model.eval(), input_shape_dict={'data': [args.batch_size, 3, 224, 224]},
-        model_name='{}'.format(args.arch), output_path=args.output_path, deploy=True, chip=args.chip, val_loader=val_loader)
+        model_name='{}'.format(args.arch), output_path=args.output_path, mlir_deploy=True, chip=args.chip, val_loader=val_loader)
 
     mlir_hash, mlir_weights, mlir_weight_file = hash_mlir(f'{args.arch}_qat.mlir')
 

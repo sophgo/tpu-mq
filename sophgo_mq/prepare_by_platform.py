@@ -686,6 +686,6 @@ def prepare_by_platform(
             idx = idx + 1
         convert_deploy(module_tmp, net_type, input_shape_dict=input_shape_dict,
             model_name='{}'.format(arch), not_gen_bmodel = True,
-            output_path='/tmp/', bf16_mix_prec = False, deploy=False, chip=chip)
+            output_path='/dev/shm/', bf16_mix_prec = False, mlir_deploy=False, chip=chip)
         print('>>>Gets the mapping, end')
     return prepared
