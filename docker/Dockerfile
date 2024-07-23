@@ -1,4 +1,4 @@
-FROM sophgo/tpuc_dev:v3.3-cuda
+FROM sophgo/tpuc_dev:v3.4-cuda
 
 WORKDIR /workspace
 
