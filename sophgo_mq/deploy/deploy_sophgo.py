@@ -290,7 +290,7 @@ class LinearQuantizer_process(object):
             
     def find_param_map(self, data0):
         unique_id = 'null'
-        from sophgo_mq.convert_deploy import param_to_idx_dict
+        from sophgo_mq.mlir.tpu_utils import param_to_idx_dict
         global first_call_in
         if first_call_in:
             for k in param_to_idx_dict:
@@ -300,7 +300,9 @@ class LinearQuantizer_process(object):
                     break
         return unique_id
 
-    def remove_fakequantize_and_collect_params(self, onnx_path, model_name, quant_type_dict, model_onnx_mem):
+    def remove_fakequantize_and_collect_params(self, onnx_path, model_name, quant_type_dict, model_onnx_mem, mlir_deploy: bool= False):
+        global first_call_in
+        print(f'remove_fakequantize_and_collect_params {first_call_in} {mlir_deploy}')
         model = onnx.load(onnx_path) if model_onnx_mem is None else model_onnx_mem
         graph = model.graph
         out2node, inp2node = update_inp2node_out2node(graph)
@@ -337,9 +339,13 @@ class LinearQuantizer_process(object):
                 nodes_to_be_removed.extend(redundant_nodes)
                 self.clip_weight(node, name2data, inp2node, named_initializer, quant_type_dict)
                 tensor_name, scale, zero_point, qmin, qmax, dtype, quant_type = self.parse_qparams(node, name2data, quant_type_dict)
-                scale_id = self.find_param_map(scale[0])
-                zero_point_id = self.find_param_map(zero_point[0])
-                self.process_param_map(node, named_initializer, inp2node, out2node, weight_name_to_unique_id_dict, tensor_name, scale_id)
+                if first_call_in:
+                    scale_id = self.find_param_map(scale[0])
+                    zero_point_id = self.find_param_map(zero_point[0])
+                    self.process_param_map(node, named_initializer, inp2node, out2node, weight_name_to_unique_id_dict, tensor_name, scale_id)
+                else:
+                    scale_id = 'null'
+                    zero_point_id = 'null'
                 #卷积权重per-channel量化参数，bias的per-chan量化参数没有去调优
                 if len(next_nodes) == 1 and next_nodes[0][0].op_type in ['Gemm', 'Conv']:#当前伪量化节点只有1个后继，且第1个后继节点为conv类型
                     next_node_output = next_nodes[0][0].output[0]
@@ -366,9 +372,13 @@ class LinearQuantizer_process(object):
                     # fake quantize for weights
                     redundant_nodes = self.deal_with_weight_fakequant(node, out2node, inp2node, named_initializer)
                     tensor_name, scale, zero_point, qmin, qmax, dtype, quant_type = self.parse_qparams(node, name2data, quant_type_dict)
-                    scale_id = self.find_param_map(scale[0])
-                    zero_point_id = self.find_param_map(zero_point[0])
-                    self.process_param_map(node, named_initializer, inp2node, out2node, weight_name_to_unique_id_dict, tensor_name, scale_id)
+                    if first_call_in:
+                        scale_id = self.find_param_map(scale[0])
+                        zero_point_id = self.find_param_map(zero_point[0])
+                        self.process_param_map(node, named_initializer, inp2node, out2node, weight_name_to_unique_id_dict, tensor_name, scale_id)
+                    else:
+                        scale_id = 'null'
+                        zero_point_id = 'null'
                     nodes_to_be_removed.extend(redundant_nodes)
                     self.clip_weight(node, name2data, inp2node, named_initializer, quant_type_dict)
                     assert next_nodes[0][0].op_type in ['Gemm', 'Conv']
@@ -467,12 +477,11 @@ class LinearQuantizer_process(object):
         context_filename = os.path.join(output_path, '{}_clip_ranges.json'.format(model_name))
         with open(context_filename, 'w') as f:
             json.dump(context, f, indent=4)
-        global first_call_in 
         if first_call_in:
             context_filename = os.path.join(output_path, '{}_weight_name_to_unique_id.json'.format(model_name))
             with open(context_filename, 'w') as f:
                 json.dump(weight_name_to_unique_id_dict, f, indent=4)
-        first_call_in = False
+            first_call_in = False
         model_onnx = onnx.shape_inference.infer_shapes(model)
         logger.info("Finish deploy process.")
         if model_onnx_mem is None:

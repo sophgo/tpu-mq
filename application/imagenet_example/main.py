@@ -27,14 +27,25 @@ import torch.utils.data.distributed
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
-from sophgo_mq.convert_deploy import convert_deploy, deepcopy_graphmodule, export_onnx_with_fakequant_node, update_model_param, convert_merge_bn
+from sophgo_mq.convert_deploy import convert_deploy, deepcopy_graphmodule, export_onnx_with_fakequant_node, convert_merge_bn
 from sophgo_mq.prepare_by_platform import prepare_by_platform
 from sophgo_mq.utils.state import enable_calibration, enable_quantization, disable_all
 from sophgo_mq.utils.utils import generate_random_string, compare_files
 from sophgo_mq.fake_quantize.lsq import  LearnableFakeQuantize
-from tools.model_runner import mlir_inference
-import pymlir
-
+try:
+    import tpu_mlir
+    from tools.model_runner import mlir_inference
+    import pymlir
+    from sophgo_mq.mlir.tpu_utils import update_model_param
+except ModuleNotFoundError:
+    print("tpu_mlir not found, use gpu and cpu")
+    pass
+except ImportError:
+    print("tpu_mlir import error, check its installation")
+    sys.exit(1)
+except Exception as e:
+    print(f"tpu_mlir import error {e}")
+    sys.exit(1)
 
 model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
@@ -111,6 +122,10 @@ parser.add_argument('--export_onnx_before_training', action='store_true')
 parser.add_argument('--print_freq', default=5, type=int, help='print_freq')
 parser.add_argument('--use_tpu_mlir_fwd', action='store_true')
 parser.add_argument('--debug_cmd', type=str, default='')
+parser.add_argument('--fuse_preprocess', action='store_true', help='use fuse_preprocess when deploy in tpu')
+parser.add_argument('--aligned_input', action='store_true', help='aligned_input param if fuse_preprocess set true')
+parser.add_argument('--customization_format', type=str, default='',help='customerization_format param if fuse_preprocess set true')
+
 
 best_acc1 = 0
 
@@ -279,7 +294,9 @@ def main_worker(gpu, ngpus_per_node, args):
                         'quantmode': args.quantmode,
                         'strategy': 'CNN',
                         'bf16_mix_prec': args.bf16_mix_prec,
-                        'not_dynamic_update_param':'not_dynamic_update_param' in args.debug_cmd
+                        'not_dynamic_update_param':'not_dynamic_update_param' in args.debug_cmd,
+                        'model_name': args.arch,
+                        'use_tpu_mlir_fwd': args.use_tpu_mlir_fwd
                        },
         }
         if args.fp8_e4m3:
@@ -348,30 +365,8 @@ def main_worker(gpu, ngpus_per_node, args):
                                         'wobserver': 'MinMaxObserver',
                                         }
                                     }
-        model = prepare_by_platform(args.arch, model, net_type='CNN', val_loader = val_loader, 
-                                    input_shape_dict = {'data': [args.batch_size, 3, 224, 224]}, cuda = args.cuda, 
+        model = prepare_by_platform( model, input_shape_dict = {'data': [args.batch_size, 3, 224, 224]}, cuda = args.cuda, 
                                     prepare_custom_config_dict=extra_prepare_dict)
-        # print('>>>>>prepared module:', model)
-
-    # model = model.cuda(0)
-    # model.eval()
-    # images = torch.zeros(args.batch_size, 3, 224, 224, device='cuda')
-    # model(images)
-
-    # # for name, m in model.named_modules():
-    # #     if name == 'conv1_0_post_act_fake_quantizer' and isinstance(m, LearnableFakeQuantize):
-    # #         print('log_filter = True')
-    # #         m.log_filter = True
-    # #         m.activation_post_process.log_filter = True
-    # #         break
-
-    # mlir_model_path = convert_deploy(model.eval(), 'CNN', input_shape_dict=
-    #     {'data': [args.batch_size, 3, 224, 224]},
-    #     model_name='{}'.format(args.arch),
-    #     output_path=args.output_path, bf16_mix_prec = args.bf16_mix_prec, not_gen_bmodel = True,
-    #     deploy = True, val_loader = val_loader, chip = args.chip)
-    # update_model_param(model, args.arch, args.chip, args.output_path, 'update_model_param_log' in args.debug_cmd)
-    # exit(0)
     
     if not torch.cuda.is_available():
         print('using CPU, this will be slow')
@@ -478,23 +473,26 @@ def main_worker(gpu, ngpus_per_node, args):
             gen_test_ref_data(cali_loader, model, args)
             convert_deploy(model.eval(), input_shape_dict={'data': [args.deploy_batch_size, 3, 224, 224]},
                 model_name='{}'.format(args.arch), output_path=args.output_path, mlir_deploy=True, chip=args.chip, val_loader=val_loader)
-        exit(0)
 
     if args.fast_test:
         args.epochs = 1
     
-    print(f'>>> convert_deploy before train ')
-    mlir_model_path = convert_deploy(model.eval(), 'CNN', input_shape_dict=
-        {'data': [args.batch_size, 3, 224, 224]},
-        model_name='{}'.format(args.arch),
-        output_path=args.output_path, bf16_mix_prec = args.bf16_mix_prec, not_gen_bmodel = True,
-        mlir_deploy = True, val_loader = val_loader, chip = args.chip)
-    mlir_cuda = pymlir.cuda()
-    mlir_cuda.load(mlir_model_path)
-    output_names = mlir_cuda.output_names
-    print('output_names:', output_names)
-    del mlir_cuda
-    print(f'>>> convert_deploy before train end, mlir_model_path:{mlir_model_path}')
+    if args.use_tpu_mlir_fwd:
+        print(f'>>> convert_deploy before train ')
+        mlir_model_path = convert_deploy(model.eval(), 'CNN', input_shape_dict=
+            {'data': [args.batch_size, 3, 224, 224]},
+            model_name='{}'.format(args.arch),
+            output_path=args.output_path, bf16_mix_prec = args.bf16_mix_prec, not_gen_bmodel = True,
+            mlir_deploy = True, val_loader = val_loader, chip = args.chip)
+        mlir_cuda = pymlir.cuda()
+        mlir_cuda.load(mlir_model_path)
+        output_names = mlir_cuda.output_names
+        print('output_names:', output_names)
+        del mlir_cuda
+        print(f'>>> convert_deploy before train end, mlir_model_path:{mlir_model_path}')
+    else:
+        mlir_model_path = None
+        output_names = None
     
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
@@ -516,7 +514,7 @@ def main_worker(gpu, ngpus_per_node, args):
     convert_deploy(model.eval(), 'CNN', input_shape_dict=
         {'data': [args.deploy_batch_size, 3, 224, 224]},
         model_name='{}'.format(args.arch),
-        output_path=args.output_path, bf16_mix_prec = args.bf16_mix_prec, mlir_deploy=True, chip=args.chip, val_loader=val_loader)
+        output_path=args.output_path, bf16_mix_prec = args.bf16_mix_prec, mlir_deploy=args.use_tpu_mlir_fwd, chip=args.chip, val_loader=val_loader, fuse_preprocess=args.fuse_preprocess, customization_format=args.customization_format, aligned_input=args.aligned_input)
 
 def prepare_dataloader(args):
     traindir = os.path.join(args.train_data, 'train')
@@ -625,7 +623,7 @@ def train(train_loader, model, criterion, criterion_cpu, optimizer, epoch, args,
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     meters = [batch_time, data_time]
-    if 'show_gpu_status' in args.debug_cmd:
+    if 'show_gpu_status' in args.debug_cmd or not args.use_tpu_mlir_fwd:
         losses = AverageMeter('Loss', ':.4e')
         top1 = AverageMeter('Acc@1', ':6.2f')
         top5 = AverageMeter('Acc@5', ':6.2f')
@@ -745,7 +743,7 @@ def train(train_loader, model, criterion, criterion_cpu, optimizer, epoch, args,
             for hd in hook_handles:
                 hd.remove()
         loss = criterion(output, target)
-        if 'show_gpu_status' in args.debug_cmd:
+        if 'show_gpu_status' in args.debug_cmd or not args.use_tpu_mlir_fwd:
             acc1, acc5 = accuracy(output, target, topk=(1, 5))
             losses.update(loss.item(), batch_size)
             top1.update(acc1[0], batch_size)
