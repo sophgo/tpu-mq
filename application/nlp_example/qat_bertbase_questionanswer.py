@@ -296,7 +296,7 @@ def prec(datasets,trainer):
         features_per_example1[example_id_to_index1[feature["example_id"]]].append(i)
     
     final_predictions1 = postprocess_qa_predictions(datasets["validation"], validation_features1, raw_predictions1.predictions)
-    metric = load_metric("squad_v2" if squad_v2 else "squad")
+    metric = load_metric("squad_v2" if squad_v2 else "squad", trust_remote_code=True)
     if squad_v2:
         formatted_predictions = [{"id": k, "prediction_text": v, "no_answer_probability": 0.0} for k, v in final_predictions1.items()]
     else:

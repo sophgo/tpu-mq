@@ -138,7 +138,7 @@ def main(config_path):
         )
     else:
         eval_datasets = raw_datasets['validation']
-    metric = datasets.load_metric("glue", config.data.task_name)
+    metric = datasets.load_metric("glue", config.data.task_name,trust_remote_code=True)
 
     if hasattr(config, 'quant'):
         model = quantize_model(model, config.quant)

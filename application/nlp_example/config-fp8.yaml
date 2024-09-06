@@ -3,7 +3,7 @@ quant:
         quantizer: E5M2FakeQuantize
         observer: EMAQuantileObserver
         bit: 8
-        symmetric: False
+        symmetric: True
         per_channel: False
     w_qconfig:
         quantizer: E5M2FakeQuantize
@@ -14,7 +14,9 @@ quant:
     scaling_method: no_scaling # 在这个地方选取一种scale获取的手段（max/mean/no_scaling，具体的获取流程可以阅读E4/E5的fake quant）
     calibrate: 64
     pot_scale: False
-    backend: academic
+    chip: BM1690
+    quantmode: weight_only
+
 data:
     task_name: mrpc
     dataset_name: mrpc
@@ -33,6 +35,7 @@ data:
 model:
     type: bert
     model_name_or_path: Intel/bert-base-uncased-mrpc # 需要将此处的模型更改为要测试的网络模型
+    #model_name_or_path: /workspace/pretrained/bert-base-uncased-mrpc # 需要将此处的模型更改为要测试的网络模型
     config_name: null # pretrained config name or path if not the same as model_name
     tokenizer_name: null
     cache_dir: ./cache_dir 
@@ -44,6 +47,7 @@ model:
 train:
     seed: 42
     output_dir: output_dir
+    #output_dir: /workspace/sophgo_mq/output_dir/
     overwrite_output_dir: False # use this to continue training if output_dir points to a checkpoint directory
     do_train: False
     do_eval: True
