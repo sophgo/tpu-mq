@@ -28,8 +28,19 @@ import torchvision.models as models
 from sophgo_mq.convert_deploy import convert_deploy, convert_onnx, export_onnx_with_fakequant_node
 from sophgo_mq.prepare_by_platform import prepare_by_platform
 from sophgo_mq.utils.state import enable_calibration, enable_quantization, disable_all
-import tpu_mlir
-from tools.model_runner import mlir_inference
+try:
+   import tpu_mlir
+   from tools.model_runner import mlir_inference
+except ModuleNotFoundError:
+    print("tpu_mlir not found, use gpu and cpu")
+    pass
+except ImportError:
+    print("tpu_mlir import error, check its installation")
+    sys.exit(1)
+except Exception as e:
+    print(f"tpu_mlir import error {e}")
+    sys.exit(1)
+
 
 model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
