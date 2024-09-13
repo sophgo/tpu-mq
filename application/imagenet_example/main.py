@@ -110,7 +110,7 @@ parser.add_argument('--chip', type=str, choices=['BM1688', 'BM1684X', 'BM1690', 
 parser.add_argument('--quantmode', type=str, choices=['weight_activation', 'weight_only'], default='weight_activation')
 parser.add_argument('--optim', type=str, default='sgd')
 parser.add_argument('--not-quant', action='store_true')
-parser.add_argument('--deploy', action='store_true')
+parser.add_argument('--tpu_deploy', action='store_true')
 parser.add_argument('--fast_test', action='store_true')
 parser.add_argument('--cpu', action='store_true')
 parser.add_argument('--pre_eval_and_export', action='store_true')
@@ -472,7 +472,9 @@ def main_worker(gpu, ngpus_per_node, args):
             del module_tmp2
             gen_test_ref_data(cali_loader, model, args)
             convert_deploy(model.eval(), input_shape_dict={'data': [args.deploy_batch_size, 3, 224, 224]},
-                model_name='{}'.format(args.arch), output_path=args.output_path, mlir_deploy=True, chip=args.chip, val_loader=val_loader)
+                model_name='{}'.format(args.arch), output_path=args.output_path, deploy=args.tpu_deploy, chip=args.chip, val_loader=val_loader)
+        exit(0)
+
 
     if args.fast_test:
         args.epochs = 1
