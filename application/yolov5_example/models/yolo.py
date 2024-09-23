@@ -34,9 +34,45 @@ try:
 except ImportError:
     thop = None
 
+global_anchors = None
+global_stride = None
+def standalone_make_grid(anchors, nx=20, ny=20, i=0, torch_1_10=check_version(torch.__version__, '1.10.0')):
+    global global_anchors
+    global global_stride
+    d = global_anchors[i].device
+    t = global_anchors[i].dtype
+    na = 3 #len(global_anchors[0])//2
+    shape = 1, na, ny, nx, 2  # grid shape
+    y, x = torch.arange(ny, device=d, dtype=t), torch.arange(nx, device=d, dtype=t)
+    if torch_1_10:  # torch>=1.10.0 meshgrid workaround for torch>=0.7 compatibility
+        yv, xv = torch.meshgrid(y, x, indexing='ij')
+    else:
+        yv, xv = torch.meshgrid(y, x)
+    grid = torch.stack((xv, yv), 2).expand(shape) - 0.5  # add grid offset, i.e. y = 2.0 * x - 0.5
+    anchor_grid = (global_anchors[i] * global_stride[i]).view((1, na, 1, 1, 2)).expand(shape)
+    return grid, anchor_grid
+
+def standalone_cal_out(x):
+    global global_stride
+    global global_anchors
+    grid=[]
+    anchor_grid=[]
+    z=[]
+    for i in np.arange(len(x)):
+        bs, _, _, ny, nx = x[i].permute(0, 1, 4, 2, 3).shape  # x(bs,255,20,20) to x(bs,3,20,20,85)    
+        grid_, anchor_grid_ = standalone_make_grid(global_anchors,nx, ny, i)
+        grid.append(grid_.to(x[i].device))
+        anchor_grid.append(anchor_grid_.to(x[i].device))
+
+        y = x[i].sigmoid()
+        y[..., 0:2] = (y[..., 0:2] * 2 + grid[i]) * global_stride[i]  # xy
+        y[..., 2:4] = (y[..., 2:4] * 2) ** 2 * anchor_grid[i]  # wh
+        z.append(y.view(bs, -1, 85))
+    return torch.cat(z, 1)
 
 class Detect(nn.Module):
     stride = None  # strides computed during build
+    #stride = torch.tensor([ 8., 16., 32.])
     onnx_dynamic = False  # ONNX export parameter
     export = False  # export mode
 
@@ -73,8 +109,8 @@ class Detect(nn.Module):
                     wh = (wh * 2) ** 2 * self.anchor_grid[i]  # wh
                     y = torch.cat((xy, wh, conf), 4)
                 z.append(y.view(bs, -1, self.no))
-
-        return x if self.training else (torch.cat(z, 1),) if self.export else (torch.cat(z, 1), x)
+        #return x if self.training else (torch.cat(z, 1),) if self.export else (torch.cat(z, 1), x)
+        return x
 
     def _make_grid(self, nx=20, ny=20, i=0, torch_1_10=check_version(torch.__version__, '1.10.0')):
         d = self.anchors[i].device
@@ -106,6 +142,7 @@ class BaseModel(nn.Module):
             y.append(x if m.i in self.save else None)  # save output
             # if visualize:
             #     feature_visualization(x, m.type, m.i, save_dir=visualize)
+        #print(f'forward once, train {self.training} list {isinstance(x,list)} tuple {isinstance(x,tuple)}')
         return x
 
     def _profile_one_layer(self, m, x, dt):
@@ -149,6 +186,8 @@ class BaseModel(nn.Module):
 class DetectionModel(BaseModel):
     # YOLOv5 detection model
     def __init__(self, cfg='yolov5s.yaml', ch=3, nc=None, anchors=None):  # model, input channels, number of classes
+        global global_stride
+        global global_anchors
         super().__init__()
         if isinstance(cfg, dict):
             self.yaml = cfg  # model dict
@@ -180,6 +219,8 @@ class DetectionModel(BaseModel):
             m.anchors /= m.stride.view(-1, 1, 1)
             self.stride = m.stride
             self._initialize_biases()  # only run once
+            global_anchors = m.anchors
+            global_stride = m.stride
 
         # Init weights, biases
         initialize_weights(self)

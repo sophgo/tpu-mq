@@ -417,7 +417,6 @@ class ModelEMA:
 
     @smart_inference_mode()
     def update(self, model):
-        return
         # Update EMA parameters
         self.updates += 1
         d = self.decay(self.updates)

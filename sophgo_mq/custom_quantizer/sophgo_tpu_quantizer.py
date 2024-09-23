@@ -23,6 +23,21 @@ from typing import (
 )
 from sophgo_mq.utils import get_flattened_qconfig_dict
 
+from sophgo_mq.observer import (
+    ClipStdObserver,
+    LSQObserver,
+    MinMaxFloorObserver,
+    MinMaxObserver,
+    EMAMinMaxObserver,
+    PoTModeObserver,
+    EMAQuantileObserver,
+    MSEObserver,
+    EMAMSEObserver,
+    KLDObserver,
+)
+from sophgo_mq.scheme import QuantizeScheme
+
+
 def generate_random_string(length):
     chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
     return ''.join(random.choices(chars, k=length))
@@ -190,7 +205,6 @@ class SophgoTpuQuantizer(ModelQuantizer):
                 qconfig1 = flattened_qconfig_dict.get('', None) #最后找全局qconfig，优先级最低
             fake_quantizer = qconfig1.activation()
             if fp16:
-
                 fake_quantizer = BF16FakeQuantize(None)
             quantizer_name = layer.name + self.quantizer_prefix
             if hasattr(model, quantizer_name):
@@ -201,6 +215,44 @@ class SophgoTpuQuantizer(ModelQuantizer):
                 inserted_node = graph.create_node("call_module", quantizer_name, (node,), {})
                 for next_layer in next_layers:
                     next_layer.args = self._fix_succ_recursivly(next_layer.args, node, inserted_node)
+
+    def _insert_int4_fake_quantizer_before(self, model, graph, modules, flattened_qconfig_dict, node):
+        qconfig_node = flattened_qconfig_dict.get(node.target, None) #首先根据层名去取，优先级最高
+        if qconfig_node is None and node.target in modules:
+            qconfig_node = flattened_qconfig_dict.get(type(modules[node.target]), None) #其次根据type去取
+            if isinstance(modules[node.target], self._layers_need_check_is_dw):
+                if modules[node.target].groups > 1:
+                    qconfig_node = None
+                    return
+        if qconfig_node is None or qconfig_node.weight is None:
+            return
+        observer_weight = qconfig_node.weight()
+        if not (observer_weight.quant_min == -8 and observer_weight.quant_max == 7 or observer_weight.quant_min == 0 and observer_weight.quant_max == 15):
+            return
+        a_qscheme = QuantizeScheme(symmetry=True, per_channel=False, pot_scale=False, bit=4)
+        a_param = {}
+        #activation_fake_quant = LearnableFakeQuantize(observer=EMAMinMaxObserver, **a_qscheme.to_observer_params())
+        activation_fake_quant = qconfig_node.activation()
+        activation_fake_quant.quant_min = -8
+        activation_fake_quant.quant_max = 7
+        quantizer_name = node.name + "_input_act_fake_quantizer"
+        if hasattr(model, quantizer_name):
+            quantizer_name = node.name + f'_{generate_random_string(15)}_'+ "_input_act_fake_quantizer"
+        setattr(model, quantizer_name, activation_fake_quant)
+        logger.info("Insert act quant {}".format(quantizer_name))
+        # 在线性层之前插入假量化器
+        with graph.inserting_before(node):
+            fk_node = graph.create_node(op="call_module", target=quantizer_name, args=node.args, kwargs={})
+            #node.args = (quant_node,)
+            if isinstance(node.args, (list, tuple)):
+                _tmp = list(node.args)
+                for _i, _arg in enumerate(node.args):
+                    if _arg == node.args[0]:
+                        _tmp[_i] = fk_node
+                        break
+                node.args = tuple(_tmp)
+            else:
+                print("error, can't handle input args not tuple !")
 
 
     def get_fake_quantizer_obj(self, modules, flattened_qconfig_dict, node):
@@ -348,6 +400,25 @@ class SophgoTpuQuantizer(ModelQuantizer):
         logger.info('node_to_quantize_output:{}'.format(node_to_quantize_output))
         logger.info('flattened_qconfig_dict:{}'.format(flattened_qconfig_dict))
 
+        int4_and_int8_mix = False
+        for m in flattened_qconfig_dict:
+            if flattened_qconfig_dict[m] is None or flattened_qconfig_dict[m].weight is None:
+                continue
+            if (flattened_qconfig_dict[m].weight().quant_min == -8 and flattened_qconfig_dict[m].weight().quant_max == 7) or (flattened_qconfig_dict[m].weight().quant_min == 0 and flattened_qconfig_dict[m].weight().quant_max == 15):
+                int4_and_int8_mix = True
+                break
+
+        if int4_and_int8_mix:
+            for node in node_to_quantize_output:
+                self._insert_int4_fake_quantizer_before(model, graph, modules, flattened_qconfig_dict, node)
+            model.recompile()
+            print(f'after insert input {model}')
+            print(f'after insert input graph {model.graph}')
+            model.graph.lint()
+            graph = model.graph
+            nodes = list(model.graph.nodes)
+            modules = dict(model.named_modules())
+
         for node in node_to_quantize_output:
             qconfig2 = flattened_qconfig_dict.get(node.name, None) #首先根据node.name去取，优先级最高
             if qconfig2 is None and node.target in modules:
@@ -377,6 +448,7 @@ class SophgoTpuQuantizer(ModelQuantizer):
             model = self._set_fake_quantizer_to_next_weight_layer(model)
             model = self._set_module_only_enable_observer(model)
         return model
+
     def _find_act_quants(self, model: GraphModule) -> list:
         nodes = list(model.graph.nodes)
         modules = dict(model.named_modules())

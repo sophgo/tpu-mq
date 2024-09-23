@@ -58,7 +58,7 @@ except ModuleNotFoundError:
     pass
 except ImportError:
     print("tpu_mlir import error, check its installation")
-    sys.exit(1)
+    pass
 except Exception as e:
     print(f"tpu_mlir import error {e}")
     sys.exit(1)
