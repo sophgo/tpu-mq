@@ -34,6 +34,9 @@ from sophgo_mq.convert_deploy import convert_deploy, convert_onnx
 from sophgo_mq.prepare_by_platform import prepare_by_platform
 from sophgo_mq.utils.state import enable_calibration, enable_quantization, disable_all
 
+import sophgo_mq.nn.intrinsic.qat as qnniqat
+import sophgo_mq.nn.intrinsic as qnni
+import torch.nn.intrinsic as nni
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # YOLOv5 root directory
@@ -167,8 +170,9 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lf)  # plot_lr_scheduler(optimizer, scheduler, epochs)
 
     # EMA
-    ema = ModelEMA(model) if RANK in {-1, 0} else None
+    ema = ModelEMA(model) if RANK in {-1, 0} else None  ## now model is not inserted with fake quant
 
+    cnames = model.names
     # Resume
     best_fitness, start_epoch = 0.0, 0
     if pretrained:
@@ -233,10 +237,6 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
 
         callbacks.run('on_pretrain_routine_end')
 
-    # DDP mode
-    if cuda and RANK != -1:
-        model = smart_DDP(model)
-
     # Model attributes
     nl = de_parallel(model).model[-1].nl  # number of detection layers (to scale hyps)
     hyp['box'] *= 3 / nl  # scale to layers
@@ -266,10 +266,14 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                 f"Logging results to {colorstr('bold', save_dir)}\n"
                 f'Starting training for {epochs} epochs...')
 
+    # EMA
+    newema = ModelEMA(model) if RANK in {-1, 0} else None  ## now model is not inserted with fake quant
+
     model_name = opt.cfg.split('/')[-1].split('.')[0]
     output_dir = os.path.join(opt.output_path, model_name)
     os.system('rm -rf {};mkdir -p {}'.format(output_dir, output_dir))
     if opt.pre_eval_and_export:
+        print(f'ema.ema of original onnx : ', ema.ema)
         import copy
         print('原始onnx模型精度')
         results, maps, _ = val.run(data_dict,
@@ -279,10 +283,12 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                                     model=ema.ema,
                                     single_cls=single_cls,
                                     dataloader=val_loader,
+                                    save_json=True,
                                     save_dir=save_dir,
                                     plots=False,
                                     callbacks=callbacks,
-                                    compute_loss=compute_loss)
+                                    compute_loss=compute_loss,
+                                    cnames=cnames)
         kwargs = {
             'input_shape_dict': {'data': [1, 3, opt.imgsz, opt.imgsz]},
             'output_path': output_dir,
@@ -295,7 +301,6 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
         convert_onnx(module_tmp.eval(), **kwargs)
         del module_tmp
         model = model.train() #prepare前一定要是train模式！！
-        # exit(0)
 
     if opt.quantize:
         prepare_custom_config_dict= {
@@ -306,13 +311,216 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                         },
             'concrete_args':{'augment':False, 'profile':False, 'visualize':False}
         }
+        prepare_custom_config_dict['extra_qconfig_dict'] = {}
+        if opt.chip == "BM1688":
+            prepare_custom_config_dict['quant_dict']['chip'] = 'BM1688'
+            prepare_custom_config_dict['extra_qconfig_dict']['object_type'] = {
+                qnniqat.ConvBnReLU2d_sophgo: {  # qconfig for nniqat.ConvBnReLU2d_sophgo
+                            'mode': 'weight',
+                            'bit': 4,
+                            'wfakequantize': 'LearnableFakeQuantize',
+                            'wobserver': 'MinMaxObserver',
+                            'wperchannel': True,
+                        },
+                qnniqat.ConvReLU2d_sophgo: {  # qconfig for qnniqat.ConvReLU2d_sophgo
+                            'mode': 'weight',
+                            'bit': 4,
+                            'wfakequantize': 'LearnableFakeQuantize',
+                            'wobserver': 'MinMaxObserver',
+                            'wperchannel': True,
+                        },
+                qnniqat.ConvBn2d_sophgo: {  # qconfig for qnniqat.ConvReLU2d_sophgo
+                            'mode': 'weight',
+                            'bit': 4,
+                            'wfakequantize': 'LearnableFakeQuantize',
+                            'wobserver': 'MinMaxObserver',
+                            'wperchannel': True,
+                        },
+                torch.nn.Conv2d: {  # qconfig for qnniqat.ConvReLU2d_sophgo
+                            'mode': 'weight',
+                            'bit': 4,
+                            'wfakequantize': 'LearnableFakeQuantize',
+                            'wobserver': 'MinMaxObserver',
+                            'wperchannel': True,
+                        },
+                nni.ConvBn2d: {  # qconfig for qnniqat.ConvReLU2d_sophgo
+                            'mode': 'weight',
+                            'bit': 4,
+                            'wfakequantize': 'LearnableFakeQuantize',
+                            'wobserver': 'MinMaxObserver',
+                            'wperchannel': True,
+                        },
+                nni.ConvBnReLU2d: {  # qconfig for qnniqat.ConvReLU2d_sophgo
+                            'mode': 'weight',
+                            'bit': 4,
+                            'wfakequantize': 'LearnableFakeQuantize',
+                            'wobserver': 'MinMaxObserver',
+                            'wperchannel': True,
+                        },
+                nni.ConvReLU2d: {  # qconfig for qnniqat.ConvReLU2d_sophgo
+                            'mode': 'weight',
+                            'bit': 4,
+                            'wfakequantize': 'LearnableFakeQuantize',
+                            'wobserver': 'MinMaxObserver',
+                            'wperchannel': True,
+                        },
+                nni.LinearReLU: {  # qconfig for qnniqat.ConvReLU2d_sophgo
+                            'mode': 'weight',
+                            'bit': 4,
+                            'wfakequantize': 'LearnableFakeQuantize',
+                            'wobserver': 'MinMaxObserver',
+                            'wperchannel': False,
+                        },
+                'def_int4_act': {
+                            'mode': 'activation',
+                            'bit': 8,
+                            'afakequantize': 'LearnableFakeQuantize',
+                            'aobserver': 'EMAMinMaxObserver',
+                        },
+            }
+            prepare_custom_config_dict['extra_qconfig_dict']['module_name'] = {
+                'model.0.conv': {
+                    'mode': 'weight',
+                    'bit': 8,
+                    'wfakequantize': 'LearnableFakeQuantize',
+                    'wobserver': 'MinMaxObserver',
+                    'wperchannel': True,
+                },
+                'model.24.m.0': {
+                    'mode': 'weight',
+                    'bit': 8,
+                    'wfakequantize': 'LearnableFakeQuantize',
+                    'wobserver': 'MinMaxObserver',
+                    'wperchannel': True,
+                },
+                'model.24.m.1': {
+                    'mode': 'weight',
+                    'bit': 8,
+                    'wfakequantize': 'LearnableFakeQuantize',
+                    'wobserver': 'MinMaxObserver',
+                    'wperchannel': True,
+                },
+                'model.24.m.2': {
+                    'mode': 'weight',
+                    'bit': 8,
+                    'wfakequantize': 'LearnableFakeQuantize',
+                    'wobserver': 'MinMaxObserver',
+                    'wperchannel': True,
+                },
+                'model.2.cv3.conv': {
+                    'mode': 'weight',
+                    'bit': 8,
+                    'wfakequantize': 'LearnableFakeQuantize',
+                    'wobserver': 'MinMaxObserver',
+                    'wperchannel': True,
+                },
+                'model.4.cv3.conv': {
+                    'mode': 'weight',
+                    'bit': 8,
+                    'wfakequantize': 'LearnableFakeQuantize',
+                    'wobserver': 'MinMaxObserver',
+                    'wperchannel': True,
+                },
+                'model.6.cv3.conv': {
+                    'mode': 'weight',
+                    'bit': 8,
+                    'wfakequantize': 'LearnableFakeQuantize',
+                    'wobserver': 'MinMaxObserver',
+                    'wperchannel': True,
+                },
+                'model.8.cv3.conv': {
+                    'mode': 'weight',
+                    'bit': 8,
+                    'wfakequantize': 'LearnableFakeQuantize',
+                    'wobserver': 'MinMaxObserver',
+                    'wperchannel': True,
+                },
+                'model.9.cv2.conv': {
+                    'mode': 'weight',
+                    'bit': 8,
+                    'wfakequantize': 'LearnableFakeQuantize',
+                    'wobserver': 'MinMaxObserver',
+                    'wperchannel': True,
+                },
+                'model.13.cv1.conv': {
+                    'mode': 'weight',
+                    'bit': 8,
+                    'wfakequantize': 'LearnableFakeQuantize',
+                    'wobserver': 'MinMaxObserver',
+                    'wperchannel': True,
+                },
+                'model.13.cv3.conv': {
+                    'mode': 'weight',
+                    'bit': 8,
+                    'wfakequantize': 'LearnableFakeQuantize',
+                    'wobserver': 'MinMaxObserver',
+                    'wperchannel': True,
+                },
+                'model.17.cv1.conv': {
+                    'mode': 'weight',
+                    'bit': 8,
+                    'wfakequantize': 'LearnableFakeQuantize',
+                    'wobserver': 'MinMaxObserver',
+                    'wperchannel': True,
+                },
+                'model.17.cv3.conv': {
+                    'mode': 'weight',
+                    'bit': 8,
+                    'wfakequantize': 'LearnableFakeQuantize',
+                    'wobserver': 'MinMaxObserver',
+                    'wperchannel': True,
+                },
+                'model.20.cv1.conv': {
+                    'mode': 'weight',
+                    'bit': 8,
+                    'wfakequantize': 'LearnableFakeQuantize',
+                    'wobserver': 'MinMaxObserver',
+                    'wperchannel': True,
+                },
+                'model.20.cv3.conv': {
+                    'mode': 'weight',
+                    'bit': 8,
+                    'wfakequantize': 'LearnableFakeQuantize',
+                    'wobserver': 'MinMaxObserver',
+                    'wperchannel': True,
+                },
+                'model.23.cv1.conv': {
+                    'mode': 'weight',
+                    'bit': 8,
+                    'wfakequantize': 'LearnableFakeQuantize',
+                    'wobserver': 'MinMaxObserver',
+                    'wperchannel': True,
+                },
+                'model.23.cv3.conv': {
+                    'mode': 'weight',
+                    'bit': 8,
+                    'wfakequantize': 'LearnableFakeQuantize',
+                    'wobserver': 'MinMaxObserver',
+                    'wperchannel': True,
+                },
+                'model.9.cv2.conv': {
+                    'mode': 'weight',
+                    'bit': 8,
+                    'wfakequantize': 'LearnableFakeQuantize',
+                    'wobserver': 'MinMaxObserver',
+                    'wperchannel': True,
+                },
+            }
         model.train()
         model = model.to(device)
+        print('before prepare model: ', model)
         model = prepare_by_platform(model, prepare_custom_config_dict=prepare_custom_config_dict)
         print('prepared module:', model)
         enable_calibration(model)
         calibration_flag = True
         model = model.to(device)
+        # EMA
+        print('Update ema to fake quant model')
+        ema = ModelEMA(model) if RANK in {-1, 0} else None  ## now model is not inserted with fake quant
+
+    # DDP mode
+    #if cuda and RANK != -1:
+    #    model = smart_DDP(model)
 
     for epoch in range(start_epoch, epochs):  # epoch ------------------------------------------------------------------
         callbacks.run('on_train_epoch_start')
@@ -339,7 +547,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
         print('sample_size:', sample_size)
         optimizer.zero_grad()
         for i, (imgs, targets, paths, _) in pbar:  # batch -------------------------------------------------------------
-
+            model.train()
             if opt.fast_test and i == 100:
                 break
 
@@ -369,6 +577,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
             # Forward
             with torch.cuda.amp.autocast(amp):
                 pred = model(imgs)  # forward
+                #print(f'forward in training, trainning {model.training} list {isinstance(pred,list)}')
                 loss, loss_items = compute_loss(pred, targets.to(device))  # loss scaled by batch_size
                 # print(i, 'loss:', loss)
                 if RANK != -1:
@@ -376,15 +585,18 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                 if opt.quad:
                     loss *= 4.
 
-            if opt.quantize:
+            if opt.quantize and epoch == start_epoch:
                 if calibration_flag:
                     if i >= 50:
                         calibration_flag = False
                         model.zero_grad()
                         enable_quantization(model)
                         print('close calibration')
+                        if ema:
+                            print('Update ema to fake quant model after cali')
+                            ema = ModelEMA(model) if RANK in {-1, 0} else None  ## now model is not inserted with fake quant
                     else:
-                        print('calibration iter{}'.format(i))
+                        print('calibration iter {}'.format(i))
                         continue
 
             # Backward
@@ -410,6 +622,8 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                 callbacks.run('on_train_batch_end', ni, model, imgs, targets, paths, plots)
                 if callbacks.stop_training:
                     return
+                #if i%20 == 0:
+                #    print(f'>>>>>>>>>>>>>>>>>>mloss is {mloss}')
             # end batch ------------------------------------------------------------------------------------------------
 
         # Scheduler
@@ -424,7 +638,8 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
             callbacks.run('on_train_epoch_end', epoch=epoch)
             ema.update_attr(model, include=['yaml', 'nc', 'hyp', 'names', 'stride', 'class_weights'])
             final_epoch = (epoch + 1 == epochs) or stopper.possible_stop
-            if not noval or final_epoch:  # Calculate mAP
+            if not noval or final_epoch or True:  # Calculate mAP
+                print(f'final epoch {final_epoch} {epoch}')
                 results, maps, _ = val.run(data_dict,
                                            batch_size=batch_size // WORLD_SIZE * 2,
                                            imgsz=imgsz,
@@ -433,12 +648,16 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                                            single_cls=single_cls,
                                            dataloader=val_loader,
                                            save_dir=save_dir,
+                                           save_json=True,
                                            plots=False,
                                            callbacks=callbacks,
-                                           compute_loss=compute_loss)
+                                           compute_loss=compute_loss,
+                                           cnames=cnames,ftest=True)
 
             # Update best mAP
             fi = fitness(np.array(results).reshape(1, -1))  # weighted combination of [P, R, mAP@.5, mAP@.5-.95]
+            print(f'Validate: result is {results}')
+            print(f'Validate: map is    {maps}')
             stop = stopper(epoch=epoch, fitness=fi)  # early stop check
             if fi > best_fitness:
                 best_fitness = fi
@@ -466,7 +685,6 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
             #         torch.save(ckpt, w / f'epoch{epoch}.pt')
             #     del ckpt
             #     callbacks.run('on_model_save', last, epoch, final_epoch, best_fitness, fi)
-
         # EarlyStopping
         if RANK != -1:  # if DDP training
             broadcast_list = [stop if RANK == 0 else None]
@@ -475,22 +693,22 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                 stop = broadcast_list[0]
         if stop:
             break  # must break all DDP ranks
-
-        if opt.quantize:
-            print(f'epoch{epoch} convert_deploy')
-            model_name = opt.cfg.split('/')[-1].split('.')[0]
-            output_dir = os.path.join(opt.output_path, model_name)
-            output_dir = os.path.join(output_dir, str(epoch))
-            output_dir = os.path.join(output_dir, model_name)
-            os.system('mkdir -p {}'.format(output_dir))
-            model2 = deepcopy(model)
-            net_type = 'CNN'
-            convert_deploy(model2.eval(), net_type, input_shape_dict={'data': [1, 3, opt.imgsz, opt.imgsz]},
-                model_name='{}'.format(model_name), output_path=output_dir)
-            del model2
-                
         # end epoch ----------------------------------------------------------------------------------------------------
     # end training -----------------------------------------------------------------------------------------------------
+
+    if opt.quantize:
+        print(f'epoch{epoch} convert_deploy')
+        model_name = opt.cfg.split('/')[-1].split('.')[0]
+        output_dir = os.path.join(opt.output_path, model_name)
+        output_dir = os.path.join(output_dir, str(epoch))
+        output_dir = os.path.join(output_dir, model_name)
+        os.system('mkdir -p {}'.format(output_dir))
+        model2 = deepcopy(model)
+        net_type = 'CNN'
+        convert_deploy(model2.eval(), net_type, input_shape_dict={'data': [1, 3, opt.imgsz, opt.imgsz]},
+            model_name='{}'.format(model_name), output_path=output_dir)
+        del model2
+
 
     if not opt.fast_test and RANK in {-1, 0}:
         LOGGER.info(f'\n{epoch - start_epoch + 1} epochs completed in {(time.time() - t0) / 3600:.3f} hours.')
@@ -512,7 +730,8 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                         verbose=True,
                         plots=plots,
                         callbacks=callbacks,
-                        compute_loss=compute_loss)  # val best model with plots
+                        compute_loss=compute_loss,
+                        )  # val best model with plots
                     if is_coco:
                         callbacks.run('on_fit_epoch_end', list(mloss) + list(results) + lr, epoch, best_fitness, fi)
 
@@ -576,6 +795,8 @@ def parse_opt(known=False):
     parser.add_argument('--quantize', action='store_true', help='quantize')
     parser.add_argument('--pre_eval_and_export', action='store_true', help='pre_eval_and_export')
     parser.add_argument('--fast_test', action='store_true', help='fast_test')
+    parser.add_argument('--chip', type=str, default='BM1690', help='target chip to quantize')
+
 
     return parser.parse_known_args()[0] if known else parser.parse_args()
 

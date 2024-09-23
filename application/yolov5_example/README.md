@@ -361,3 +361,6 @@ professional support requests please visit [https://ultralytics.com/contact](htt
 
 [assets]: https://github.com/ultralytics/yolov5/releases
 [tta]: https://github.com/ultralytics/yolov5/issues/303
+
+commands to qat int4 yolov5s with mixed precision:
+python3 train.py --cfg=yolov5s.yaml --weights=yolov5s.pt --data=coco.yaml --epochs=300 --output_path=./yolov5s --batch_size=16 --quantize --chip=BM1688 --pre_eval_and_export --save-period=1 2>&1 |tee yolov5s/record 

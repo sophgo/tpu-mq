@@ -43,7 +43,7 @@ from utils.general import (LOGGER, check_dataset, check_img_size, check_requirem
 from utils.metrics import ConfusionMatrix, ap_per_class, box_iou
 from utils.plots import output_to_target, plot_images, plot_val_study
 from utils.torch_utils import select_device, smart_inference_mode, time_sync
-
+from models.yolo import standalone_cal_out
 
 def save_one_txt(predn, save_conf, shape, file):
     # Save one txt result
@@ -122,6 +122,8 @@ def run(
         plots=True,
         callbacks=Callbacks(),
         compute_loss=None,
+        cnames=None,
+        ftest=False
 ):
     # Initialize/load model and set device
     training = model is not None
@@ -182,15 +184,19 @@ def run(
 
     seen = 0
     confusion_matrix = ConfusionMatrix(nc=nc)
-    names = dict(enumerate(model.names if hasattr(model, 'names') else model.module.names))
+    if cnames is not None:
+        names = dict(enumerate(cnames))
+    else:
+        names = dict(enumerate(model.names if hasattr(model, 'names') else model.module.names))
     class_map = coco80_to_coco91_class() if is_coco else list(range(1000))
     s = ('%20s' + '%11s' * 6) % ('Class', 'Images', 'Labels', 'P', 'R', 'mAP@.5', 'mAP@.5:.95')
     dt, p, r, f1, mp, mr, map50, map = [0.0, 0.0, 0.0], 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
     loss = torch.zeros(3, device=device)
     jdict, stats, ap, ap_class = [], [], [], []
     callbacks.run('on_val_start')
-    pbar = tqdm(dataloader, desc=s, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
-    for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
+    #pbar = tqdm(dataloader, desc=s, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
+    #for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
+    for batch_i, (im, targets, paths, shapes) in enumerate(dataloader):
         callbacks.run('on_val_batch_start')
         t1 = time_sync()
         if cuda:
@@ -203,11 +209,24 @@ def run(
         dt[0] += t2 - t1
 
         # Inference
-        out, train_out = model(im) if training else model(im, augment=augment, val=True)  # inference, loss outputs
+        tmpout=model(im)
+        #print(f'forward in val, train {model.training} list {isinstance(tmpout, list)} tuple {isinstance(tmpout, tuple)}')
+        cal_loss = False
+        if isinstance(tmpout, tuple) and len(tmpout) == 2:
+            out, train_out = tmpout
+            cal_loss = True
+        elif isinstance(tmpout, list):
+            train_out = tmpout
+            out = standalone_cal_out(train_out)
+        if not training:
+            print('not support non train mode!')
+            sys.exit(1)
+
+        #out, train_out = model(im) if training else model(im, augment=augment, val=True)  # inference, loss outputs
         dt[1] += time_sync() - t2
 
         # Loss
-        if compute_loss:
+        if compute_loss and cal_loss:
             loss += compute_loss([x.float() for x in train_out], targets)[1]  # box, obj, cls
 
         # NMS
@@ -271,6 +290,8 @@ def run(
     nt = np.bincount(stats[3].astype(int), minlength=nc)  # number of targets per class
 
     # Print results
+    LOGGER.info('calculate in eval')
+    LOGGER.info(s)
     pf = '%20s' + '%11i' * 2 + '%11.3g' * 4  # print format
     LOGGER.info(pf % ('all', seen, nt.sum(), mp, mr, map50, map))
     if nt.sum() == 0:

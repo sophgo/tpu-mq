@@ -53,6 +53,10 @@ from sophgo_mq.utils.logger import logger
 from sophgo_mq.utils.registry import DEFAULT_MODEL_QUANTIZER
 from sophgo_mq.scheme import QuantizeScheme
 
+from sophgo_mq.nn.intrinsic.qat.modules.conv_fused_sophgo_tpu import ConvReLU2d_sophgo, ConvBn2d_sophgo, ConvBnReLU2d_sophgo
+import sophgo_mq.nn.intrinsic as qnni
+
+
 __all__ = ['prepare_by_platform']
 
 ParamsTable = {
@@ -306,13 +310,17 @@ def get_qconfig_by_platform(quant_dict:Dict,extra_qparams: Dict):
             if mode=="activation":
                 afq=object_type.get(type_name,{}).get("afakequantize")
                 aob=object_type.get(type_name,{}).get("aobserver")
-                qconfig['object_type'][type_name]=createQConfigForSophgo_activation(bit_num = bit, a_fakequantize = afq, a_observer = aob)
+                weight = createQConfigForSophgo_weight(chip, bit_num = bit).weight
+                qconfig['object_type'][type_name]=createQConfigForSophgo_activation(bit_num = bit, a_fakequantize = afq, a_observer = aob, weight=weight)
             elif mode=="weight":
                 wfq=object_type.get(type_name,{}).get("wfakequantize")
                 wob=object_type.get(type_name,{}).get("wobserver")
-                qconfig['object_type'][type_name]=createQConfigForSophgo_weight(chip, bit_num = bit, w_fakequantize = wfq, w_observer = wob)
+                wpc=object_type.get(type_name,{}).get("wperchannel")
+                activation = createQConfigForSophgo_activation(bit_num = 8).activation
+                qconfig['object_type'][type_name]=createQConfigForSophgo_weight(chip, bit_num = bit, w_fakequantize = wfq, w_observer = wob, wper_channel=wpc, activation=activation)
             else:
                 raise ValueError(f'无效的模式: {mode}。模式应该是 "activation" 或 "weight"。')
+        
     # if object_type is not None:
     #     if "object_type" in qconfig:
     #         qconfig["object_type"].update(object_type)
@@ -333,7 +341,8 @@ def get_qconfig_by_platform(quant_dict:Dict,extra_qparams: Dict):
             elif mode=="weight":
                 wfq=module_name.get(type_name,{}).get("wfakequantize")
                 wob=module_name.get(type_name,{}).get("wobserver")
-                qconfig["module_name"][type_name]=createQConfigForSophgo_weight(chip, bit_num = bit, w_fakequantize = wfq, w_observer = wob)
+                wpc=module_name.get(type_name,{}).get("wperchannel")
+                qconfig["module_name"][type_name]=createQConfigForSophgo_weight(chip, bit_num = bit, w_fakequantize = wfq, w_observer = wob, wper_channel=wpc)
             else:
                 raise ValueError(f'无效的模式: {mode}。模式应该是 "activation" 或 "weight"。')
 
@@ -444,23 +453,23 @@ def chipparams(chip,extra_qparams,FakeQuantize):
         a_fakequantize = FakeQuantize[a_fakequantize]
     chip_params = ParamsTable[chip]
     return chip_params,w_observer,a_observer,w_fakequantize,a_fakequantize
-def createQConfigForSophgo_activation(bit_num = 4, a_fakequantize = 'LearnableFakeQuantize', a_observer = 'MinMaxObserver', a_fakeq_params = {}, a_observer_extra_args = {}):
+def createQConfigForSophgo_activation(bit_num = 4, a_fakequantize = 'LearnableFakeQuantize', a_observer = 'MinMaxObserver', a_fakeq_params = {}, a_observer_extra_args = {}, weight=None):
     a_observer = ObserverDict[a_observer]
     a_fakequantize = FakeQuantizeDict[a_fakequantize]
     a_qscheme = QuantizeScheme(symmetry=True, per_channel=False, pot_scale=False, bit=bit_num) #Sophgo_TPU use sym per-layer
     a_qscheme.kwargs.update(a_observer_extra_args)
     a_qconfig = a_fakequantize.with_args(observer=a_observer, **a_fakeq_params, **a_qscheme.to_observer_params())
-    return QConfig(activation=a_qconfig, weight=None)
-def createQConfigForSophgo_weight(chip, bit_num = 4, w_fakequantize = 'FixedFakeQuantize', w_observer = 'MinMaxObserver', w_fakeq_params = {}, w_observer_extra_args = {}):
+    return QConfig(activation=a_qconfig, weight=weight)
+def createQConfigForSophgo_weight(chip, bit_num = 4, w_fakequantize = 'FixedFakeQuantize', w_observer = 'MinMaxObserver', w_fakeq_params = {}, w_observer_extra_args = {}, wper_channel=False, activation=torch.nn.Identity):
     w_observer = ObserverDict[w_observer]
     w_fakequantize = FakeQuantizeDict[w_fakequantize]
     sym_range = False
     if chip in ['MARS3', 'CV183X', 'CV182X', 'CV181X', 'CV180X', 'CV186X']:
         sym_range = True
-    w_qscheme = QuantizeScheme(symmetry=True, per_channel=False, pot_scale=False, bit=bit_num, symmetric_range = sym_range) #Sophgo_TPU use sym per-layer
+    w_qscheme = QuantizeScheme(symmetry=True, per_channel=wper_channel, pot_scale=False, bit=bit_num, symmetric_range = sym_range) #Sophgo_TPU use sym per-layer
     w_qscheme.kwargs.update(w_observer_extra_args)
     w_qconfig = w_fakequantize.with_args(observer=w_observer, **w_fakeq_params, **w_qscheme.to_observer_params())
-    return QConfig(activation=torch.nn.Identity, weight=w_qconfig) #activation use global quant conifg
+    return QConfig(activation=activation, weight=w_qconfig) #activation use global quant conifg
 
 def createQConfig(w_fakequantize = 'LearnableFakeQuantize', a_fakequantize = 'LearnableFakeQuantize', 
                 w_observer = 'MinMaxObserver', a_observer = 'EMAMinMaxObserver', w_qscheme = {}, a_qscheme = {},
@@ -498,6 +507,23 @@ def createQConfigForInt4SophgoLiner(w_fakequantize = 'LearnableFakeQuantize', a_
     a_observer = ObserverDict[a_observer]
     a_fakequantize = FakeQuantizeDict[a_fakequantize]
     a_qscheme = QuantizeScheme(symmetry=True, per_channel=False, pot_scale=False, bit=4)
+    a_qscheme.kwargs.update(a_observer_extra_args)
+    a_qconfig = a_fakequantize.with_args(observer=a_observer, **a_fakeq_params, **a_qscheme.to_observer_params())
+    return QConfig(activation=a_qconfig, weight=w_qconfig)
+
+def createQConfigForInt4ConvLinear(w_fakequantize = 'LearnableFakeQuantize', a_fakequantize = 'LearnableFakeQuantize', 
+                w_observer = 'MinMaxObserver', a_observer = 'EMAMinMaxObserver', w_qscheme = {}, a_qscheme = {},
+                w_fakeq_params = {}, a_fakeq_params = {}, w_observer_extra_args = {}, a_observer_extra_args = {}, wper_channel=True):
+    w_observer = ObserverDict[w_observer]
+    w_fakequantize = FakeQuantizeDict[w_fakequantize]
+    w_qscheme = QuantizeScheme(symmetry=True, per_channel=wper_channel, pot_scale=False, bit=4)
+
+    w_qscheme.kwargs.update(w_observer_extra_args)
+    w_qconfig = w_fakequantize.with_args(observer=w_observer, **w_fakeq_params, **w_qscheme.to_observer_params())
+
+    a_observer = ObserverDict[a_observer]
+    a_fakequantize = FakeQuantizeDict[a_fakequantize]
+    a_qscheme = QuantizeScheme(symmetry=True, per_channel=False, pot_scale=False, bit=8)
     a_qscheme.kwargs.update(a_observer_extra_args)
     a_qconfig = a_fakequantize.with_args(observer=a_observer, **a_fakeq_params, **a_qscheme.to_observer_params())
     return QConfig(activation=a_qconfig, weight=w_qconfig)
@@ -630,6 +656,8 @@ def prepare_by_platform(
     logger.info("Quantize model Scheme: {} Mode: {}".format(quant_dict['strategy'], model_mode))
     qconfig = get_qconfig_by_platform(quant_dict, extra_qconfig_dict)
 
+    print(f'qconfig: {qconfig}' )
+
     _swap_ff_with_fxff(model)
     # Preserve attr.
     preserve_attr_dict = dict()
@@ -649,10 +677,10 @@ def prepare_by_platform(
     if custom_tracer is not None:
         tracer = custom_tracer
     graph = tracer.trace(model, concrete_args)
-    print('>>>>>trace graph:',graph)
+    print(f'>>>>>>>>>>>>traced graph {graph}')
     name = model.__class__.__name__ if isinstance(model, torch.nn.Module) else model.__name__
     modules = dict(model.named_modules())
-    print('>>>>>named_modules:',modules[''])
+    print(f'named modules {modules}')
     graph, duplicated_modules = duplicate_reused_nodes(graph, modules)
     constant_nodes = prepare_constant_dict(graph, model)
     modules.update(duplicated_modules)
