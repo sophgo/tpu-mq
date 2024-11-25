@@ -99,21 +99,22 @@ class E5M2FakeQuantize(QuantizeBase):
         self.register_buffer('scale', torch.tensor([1.0], dtype=torch.float))
         self.register_buffer('zero_point', torch.tensor([0], dtype=torch.int))
         self.load_state_dict_hook = PerChannelLoadHook(self)
-        self.data_type = "fp8_e5m2"
+        #self.data_type = "fp8_e5m2"
+        self.scaling_method = "none"
+        self.work_mode = "E5M2_RNE"
+
 
     def forward(self, X):
-        tensor_q = torch.zeros_like(X)
         #scaling_method = parse_config('config.yaml').quant.scaling_method
-        scaling_method = "mean"
         if self.observer_enabled[0] == 1: # enable the observer
             self.activation_post_process(X.detach())
             _scale, _zero_point = self.calculate_qparams()
-            if scaling_method.lower() == "mean":
+            if self.scaling_method.lower() == "mean":
                 mean = torch.mean(abs(torch.flatten(X.detach())))
                 mean = abs(mean) if abs(mean) > 1e-5 else get_flt_min("e5m2")
                 if abs(mean) > 0.0:
                     _scale = get_flt_min("e5m2") / abs(mean)
-            elif scaling_method.lower() == "max":
+            elif self.scaling_method.lower() == "max":
                 vmax = torch.max(abs(torch.flatten(X.detach()))) 
                 _scale = vmax / get_flt_max("e5m2")
                 _scale = torch.tensor(6.55e+04) if _scale.item() > 3.275e+04 else _scale
@@ -125,26 +126,22 @@ class E5M2FakeQuantize(QuantizeBase):
                 self.zero_point.resize_(_zero_point.shape)
             self.scale.copy_(_scale)
             self.zero_point.copy_(_zero_point)
-            ### TMP workaround
-            # self.zero_point = self.zero_point.float()
-            # self.scale = torch.ones_like(self.zero_point).to(X.device).float()
 
         if self.fake_quant_enabled[0] == 1: # enable fake quantize
             if is_symmetric_quant(self.qscheme):
                 self.zero_point.data.zero_()
             else:
                 self.zero_point.data.clamp_(self.quant_min, self.quant_max).float()
-            work_mode = "E5M2_RNE"
             quant_min=get_flt_min("e5m2")
             quant_max=get_flt_max("e5m2")
-            if scaling_method.lower() == "mean":
+            if self.scaling_method.lower() == "mean":
                 mean = torch.mean(abs(torch.flatten(X.detach())))
                 mean = abs(mean) if abs(mean) > 1e-5 else get_flt_min("e5m2")
                 if abs(mean) > 0.0:
                     _scale = torch.tensor(get_flt_min("e5m2")) / abs(mean)
-            elif scaling_method.lower() == "max":
+            elif self.scaling_method.lower() == "max":
                 vmax = torch.max(abs(torch.flatten(X.detach())))
-                _scale = vmax / get_flt_max("e5m2")
+                _scale = get_flt_max("e5m2") / vmax
                 _scale = torch.tensor(6.55e+04) if _scale.item() > 3.275e+04 else _scale
             else:
                 _scale = torch.tensor(1.0)
@@ -152,10 +149,12 @@ class E5M2FakeQuantize(QuantizeBase):
             self.scale.copy_(_scale)
             scale_fixed = torch.ones_like(self.zero_point).to(X.device).float()
             if self.is_per_channel: # per-channel
-                X = fpemu_device_fn(X, mode=work_mode, inplace=False, scale=scale_fixed, zero_point=self.zero_point, quant_min=quant_min, quant_max=quant_max, is_per_channel=True)
+                print("per channel is not support in e5m2, the recommanded scaling of e5m2 is no scaling")
+                assert(0)
+                #X = fpemu_device_fn(X, mode=self.work_mode, inplace=False, scale=scale_fixed, zero_point=self.zero_point, quant_min=quant_min, quant_max=quant_max, is_per_channel=True)
             else: # per-tensor
                 # Temporarily fix the scale to 1.0 to match the implement in tpu-mlir
-                X = fpemu_device_fn(X, mode=work_mode, inplace=False, scale=scale_fixed, zero_point=self.zero_point, quant_min=quant_min, quant_max=quant_max, is_per_channel=False)
+                X = fpemu_device_fn(X, mode=self.work_mode, inplace=False, scale=scale_fixed, zero_point=self.zero_point, quant_min=quant_min, quant_max=quant_max, is_per_channel=False)
         return X
  
     @torch.jit.export

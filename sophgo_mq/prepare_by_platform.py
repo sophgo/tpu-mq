@@ -30,8 +30,7 @@ from sophgo_mq.fake_quantize import (
     GPTQFakeQuantize,
     FP4FakeQuantize,
     GPTQFP4FakeQuantize,
-    FP4GROUPFakeQuantize,
-    FP4GROUPFakeQuantize1,
+    FPXGROUPFakeQuantize,
     Fp16FakeQuantize,
     BF16FakeQuantize
 )
@@ -157,11 +156,10 @@ FakeQuantizeDict = {
     'QDropFakeQuantize':     QDropFakeQuantize,      # BRECQ & QDrop                # noqa: E241
     'E4M3FakeQuantize':      E4M3FakeQuantize,
     'E5M2FakeQuantize':      E5M2FakeQuantize,
-    'GPTQFakeQuantize':      GPTQFakeQuantize, 
+    'GPTQFakeQuantize':      GPTQFakeQuantize,
     'FP4FakeQuantize':       FP4FakeQuantize,
     'GPTQFP4FakeQuantize':   GPTQFP4FakeQuantize,
-    'FP4GROUPFakeQuantize':  FP4GROUPFakeQuantize,
-    'FP4GROUPFakeQuantize1': FP4GROUPFakeQuantize1,
+    'FPXGROUPFakeQuantize':  FPXGROUPFakeQuantize,
     'Fp16FakeQuantize':      Fp16FakeQuantize,
     'BF16FakeQuantize':      BF16FakeQuantize,
 }
@@ -179,6 +177,10 @@ FakeQuantizeDict_Chip = {
     'E5M2FakeQuantize':      E5M2FakeQuantize,
     'Fp16FakeQuantize':      Fp16FakeQuantize,
     'BF16FakeQuantize':      BF16FakeQuantize,
+    'FP4FakeQuantize':       FP4FakeQuantize,
+    'GPTQFakeQuantize':      GPTQFakeQuantize, 
+    'GPTQFP4FakeQuantize':   GPTQFP4FakeQuantize,
+    'FPXGROUPFakeQuantize':  FPXGROUPFakeQuantize,
 }
 
 def get_qconfig_by_platform(quant_dict:Dict,extra_qparams: Dict):
@@ -244,8 +246,7 @@ def get_qconfig_by_platform(quant_dict:Dict,extra_qparams: Dict):
     else:
         if chip=="BM1688":
             assert (w_qscheme['bit']==4  or w_qscheme['bit']==8), 'unsupported data type'
-        if chip=="BM1684X" or chip=="BM1690":
-            assert (w_qscheme['bit']==8), 'unsupported data type'
+
         logger.info("Weight Quant Scheme is overrided!")
         w_qscheme = QuantizeScheme(**w_qscheme)
     a_qscheme = extra_qparams.get('a_qscheme', None)

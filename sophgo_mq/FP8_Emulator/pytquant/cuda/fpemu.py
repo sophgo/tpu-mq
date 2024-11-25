@@ -127,29 +127,34 @@ class FPEmuOp_cuda_per_channel(Function):
 
     @staticmethod
     def forward(ctx, X, mode='NONE', inplace=False, scale=torch.tensor([1.0]), zero_point=torch.tensor([0.0]), quant_min=float(1.5258789E-05), quant_max=float(57344.0), blocknorm=False, blocksize=1):
-        tensor_q = torch.zeros_like(X)
-        work_mode = "E5M2_RNE"
-        scaling_method = "mean"
-        channels = X.shape[1]
+        tensor_q = torch.zeros_like(X).reshape((-1,X.shape[-1]))
+        work_mode = mode
+        if mode.startswith('E4M3'):
+            max_=get_flt_max('e4m3')
+            min_=get_flt_min('e4m3')
+        elif mode.startswith('E5M2'):
+            max_=get_flt_max('e5m2')
+            min_=get_flt_min('e5m2')
+        scaling_method = "max"
+        channels = tensor_q.shape[0]
         for c in range(channels):
-            # sub_tensor = X.select(1, c).detach()
-            sub_tensor = X.select(1, c).detach()
+            sub_tensor = X.select(0, c).detach().flatten()  # hack !!!! per_channel for matmul weight, the weight should be in [oc ic], for conv the weight should be oc, ic, kh, kw
             if scaling_method.lower() == "mean":
-                mean = torch.mean(abs(torch.flatten(X.detach())))
-                mean = abs(mean) if abs(mean) > 1e-5 else get_flt_min("e5m2")
+                mean = torch.mean(abs(sub_tensor))
+                mean = abs(mean) if abs(mean) > 1e-5 else min_
                 if abs(mean) > 0.0:
-                        _scale = get_flt_min("e5m2") / abs(mean)
+                        _scale = min_ / abs(mean)
             elif scaling_method.lower() == "max":
-                vmax = torch.max(abs(torch.flatten(X.detach())))
-                _scale = vmax / get_flt_max("e5m2")
+                vmax = torch.max(abs(sub_tensor))
+                _scale = max_ / vmax
                 _scale = torch.tensor(6.55e+04) if _scale.item() > 3.275e+04 else _scale
             else:
                 _scale = torch.tensor(1.0)
             # self.scale.copy_(_scale)
-            sub_tensor = _forward_per_channel(ctx, sub_tensor, mode=work_mode, inplace=False, scale=torch.tensor([1.0]), zero_point=torch.tensor([0.0]), quant_min=quant_min, quant_max=quant_max)
-            tensor_q.select(1, c).data.copy_(sub_tensor)
+            sub_tensor = _forward_per_channel(ctx, sub_tensor, mode=work_mode, inplace=False, scale=_scale, zero_point=torch.tensor([0.0]), quant_min=quant_min, quant_max=quant_max)
+            tensor_q.select(0, c).data.copy_(sub_tensor)
 
-        return tensor_q
+        return tensor_q.reshape(X.shape)
 
     @staticmethod
     def backward(ctx, output_grad):
