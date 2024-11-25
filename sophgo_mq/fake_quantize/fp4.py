@@ -42,6 +42,113 @@ AF4=[-1.0,
      0.72424863,  
      1.0,
 ]
+FP6E3M2=[
+    -14.0000,
+    -12.0000,
+    -10.0000,
+    -8.0000,
+    -7.0000,
+    -6.0000,
+    -5.0000,
+    -4.0000,
+    -3.5000,
+    -3.0000,
+    -2.5000,
+    -2.0000,
+    -1.7500,
+    -1.5000,
+    -1.2500,
+    -1.0000,
+    -0.8750,
+    -0.7500,
+    -0.6250,
+    -0.5000,
+    -0.4375,
+    -0.3750,
+    -0.3125,
+    -0.2500,
+    -0.1875,
+    -0.1250,
+    -0.0625,
+    0.0000,
+    0.0625,
+    0.1250,
+    0.1875,
+    0.2500,
+    0.3125,
+    0.3750,
+    0.4375,
+    0.5000,
+    0.6250,
+    0.7500,
+    0.8750,
+    1.0000,
+    1.2500,
+    1.5000,
+    1.7500,
+    2.0000,
+    2.5000,
+    3.0000,
+    3.5000,
+    4.0000,
+    5.0000,
+    6.0000,
+    7.0000,
+    8.0000,
+    10.0000,
+    12.0000,
+    14.0000
+]
+
+FP6E2M3=[
+    -3.5000,
+    -3.0000,
+    -2.5000,
+    -2.0000,
+    -1.7500,
+    -1.5000,
+    -1.2500,
+    -1.0000,
+    -0.8750,
+    -0.7500,
+    -0.6250,
+    -0.5000,
+    -0.4375,
+    -0.3750,
+    -0.3750,
+    -0.3125,
+    -0.2500,
+    -0.2500,
+    -0.1875,
+    -0.1250,
+    -0.1250,
+    -0.0625,
+    -0.0312,
+    0.0000 ,
+    0.0312 ,
+    0.0625 ,
+    0.1250 ,
+    0.1250 ,
+    0.1875 ,
+    0.2500 ,
+    0.2500 ,
+    0.3125 ,
+    0.3750 ,
+    0.3750 ,
+    0.4375 ,
+    0.5000 ,
+    0.6250 ,
+    0.7500 ,
+    0.8750 ,
+    1.0000 ,
+    1.2500 ,
+    1.5000 ,
+    1.7500 ,
+    2.0000 ,
+    2.5000 ,
+    3.0000 ,
+    3.5000
+]
 FP4_BNB = [-12.0, -8.0, -6.0, -4.0, -3.0, -2.0, -0.0625, 0, 0.0625, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0]
 FP4_E2M1 = [-6.0, -4.0, -3.0, -2.0, -1.5, -1.0, -0.0625, 0, 0.0625, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0]
 
@@ -61,8 +168,8 @@ NF8 = torch.Tensor(v)
 NF8 = NF8.sort().values
 NF8 /= NF8.max()
 
-FLOAT_MAPPING = {"nf4": NF4, "fp4": FP4_BNB, "fp4_e2m1_bnb": FP4_BNB, "fp4_e2m1": FP4_E2M1,"af4":AF4,"nf8":NF8}
-INT_MAPPING = {"nf4": NF4_BIT, "fp4": FP4_BNB_BIT, "fp4_e2m1_bnb": FP4_BNB_BIT, "fp4_e2m1": FP4_E2M1_BIT,"af4":AF4,"nf8":NF8}
+FLOAT_MAPPING = {"nf4": NF4, "fp4": FP4_BNB, "fp4_e2m1_bnb": FP4_BNB, "fp4_e2m1": FP4_E2M1,"af4":AF4,"nf8":NF8, "fp6_e3m2": FP6E3M2, "fp6_e2m3":FP6E2M3}
+INT_MAPPING = {"nf4": NF4_BIT, "fp4": FP4_BNB_BIT, "fp4_e2m1_bnb": FP4_BNB_BIT, "fp4_e2m1": FP4_E2M1_BIT,"af4":AF4,"nf8":NF8, "fp6_e3m2": FP6E3M2, "fp6_e2m3":FP6E2M3}
 class FP4FakeQuantize(QuantizeBase):
     """This is fp4 Quantization Emulator..
     """
@@ -71,7 +178,8 @@ class FP4FakeQuantize(QuantizeBase):
         self.register_buffer('scale', torch.tensor([1.0], dtype=torch.float))
         self.register_buffer('zero_point', torch.tensor([0], dtype=torch.int))
         self.load_state_dict_hook = PerChannelLoadHook(self)
-        self.data_type="fp4_e2m1"
+        self.data_type="fp6_e2m3"
+        self.per_chan=False
         self.quantile=1.0
         self.return_int=False
 
@@ -82,7 +190,10 @@ class FP4FakeQuantize(QuantizeBase):
         if self.observer_enabled[0] == 1:
             self.activation_post_process(X.detach())
             _scale, _zero_point = self.calculate_qparams()
-            _scale = X.abs().max(1)[0] * self.quantile/ max(allow_data)
+            if self.per_chan:
+                _scale = X.abs().max(1)[0] * self.quantile/ max(allow_data)
+            else:
+                _scale = X.abs().max() * self.quantile/ max(allow_data)
             _scale, _zero_point = _scale.to(self.scale.device), _zero_point.to(self.zero_point.device)
             if self.scale.shape != _scale.shape:
                 self.scale.resize_(_scale.shape)
@@ -91,8 +202,11 @@ class FP4FakeQuantize(QuantizeBase):
             self.zero_point.copy_(_zero_point)
 
         if self.fake_quant_enabled[0] == 1:
-            _scale =X.abs().max(1)[0] * self.quantile/ max(allow_data)
-            _scale.unsqueeze_(dim=-1)
+            if self.per_chan:
+                _scale =X.abs().max(1)[0] * self.quantile/ max(allow_data)
+                _scale.unsqueeze_(dim=-1)
+            else:
+                _scale =X.abs().max() * self.quantile/ max(allow_data)
             X = X/_scale
             # if self.data_type.lower=="nf4":
             #     cdf_values = [norm.cdf(x) for x in allow_data]

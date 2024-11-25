@@ -32,8 +32,8 @@ from transformers import default_data_collator
 from transformers.onnx.features import FeaturesManager
 from datasets import load_dataset,load_metric
 import torch.optim as optim
-from sophgo_mq.prepare_by_platform1 import prepare_by_platform
-from sophgo_mq.utils.state import enable_calibration, enable_quantization, disable_all,enable_only_observer
+from sophgo_mq.prepare_by_platform import prepare_by_platform
+from sophgo_mq.utils.state import enable_calibration, enable_quantization, disable_all
 from transformers import logging
 import torch.onnx 
 from sophgo_mq.utils.logger import logger
@@ -371,6 +371,7 @@ def format_time(elapsed):
 global_var._init()
 args = parser.parse_args()
 checkpoint = "Aalaa/opt-125m-wikitext2"
+#checkpoint = "huggyllama/llama-7b"
 #load parameters
 batch_size =args.b
 epochs = args.epochs
@@ -428,7 +429,7 @@ test_dataloader = DataLoader(
         )
 #load model
 configuration = AutoConfig.from_pretrained(checkpoint)
-model =AutoModelForCausalLM.from_pretrained(checkpoint, config=configuration,torch_dtype=torch.float)
+model =AutoModelForCausalLM.from_pretrained(checkpoint, config=configuration,torch_dtype=torch.half)
 model.resize_token_embeddings(len(tokenizer))
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 model=model.to(device)
@@ -464,8 +465,8 @@ input_names =['input_ids','attention_mask']
 concrete_args = {p.name: p.default for p in sig.parameters.values() if p.name not in input_names}
 quant_dict={
     'strategy':"Transformer", # ["Transformer","CNN"]
-    'chip':"BM1688", #["BM1688","BM1684X","BM1690","academic"]
-    'quantmode':"weight_activation"#["weight_only","weight_activation"]
+    'chip':"BM1690", #["BM1688","BM1684X","BM1690","academic"]
+    'quantmode':"weight_only"#["weight_only","weight_activation"]
 }
 extra_qconfig_dict={
             'w_observer': args.wob,#'MinMaxObserver',
@@ -487,8 +488,9 @@ extra_qconfig_dict={
             'object_type':{
                 torch.nn.Linear:{
                     'mode':"weight",
-                    'bit':4,
-                    'wfakequantize':'LearnableFakeQuantize',
+                    'bit':8,
+                    'wpchannel':True,
+                    'wfakequantize':'E4M3FakeQuantize',
                     'wobserver':'MinMaxObserver'
                 }
             },

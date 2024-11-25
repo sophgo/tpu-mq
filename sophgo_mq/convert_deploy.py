@@ -43,8 +43,7 @@ from sophgo_mq.fake_quantize import (
     GPTQFakeQuantize,
     FP4FakeQuantize,
     GPTQFP4FakeQuantize,
-    FP4GROUPFakeQuantize,
-    FP4GROUPFakeQuantize1
+    FPXGROUPFakeQuantize
 )
 # from utils.mlir_shell import mlir_opt_for_top, mlir_lowering, mlir_to_model, f32_blobs_compare
 # from tools.model_runner import mlir_inference, free_mlir_module
@@ -68,7 +67,7 @@ import torchvision.transforms as TorchTransforms
 #import shlex 
 
 FP8_FAKEQUANTIZER = [E4M3FakeQuantize, E5M2FakeQuantize]
-FP4_FAKEQUANTIZER = [FP4FakeQuantize, GPTQFP4FakeQuantize, FP4GROUPFakeQuantize, FP4GROUPFakeQuantize1]
+FP4_FAKEQUANTIZER = [FP4FakeQuantize, GPTQFP4FakeQuantize, FPXGROUPFakeQuantize]
 INT_FAKEQUANTIZER = [LearnableFakeQuantize, NNIEFakeQuantize, FixedFakeQuantize, DoReFaFakeQuantize, DSQFakeQuantize, PACTFakeQuantize,\
                      TqtFakeQuantize, AdaRoundFakeQuantize, QDropFakeQuantize, GPTQFakeQuantize]
 

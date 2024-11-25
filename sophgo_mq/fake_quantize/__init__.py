@@ -12,7 +12,6 @@ from .e5m2 import E5M2FakeQuantize
 from .gptq import GPTQFakeQuantize
 from .fp4 import FP4FakeQuantize
 from .gptq_FP4 import GPTQFP4FakeQuantize
-from .fp4group import FP4GROUPFakeQuantize
-from .fp4group_doubleq import FP4GROUPFakeQuantize1
+from .fp4group import FPXGROUPFakeQuantize
 from .fp16 import Fp16FakeQuantize
 from .fp16 import BF16FakeQuantize
