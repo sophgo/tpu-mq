@@ -500,6 +500,14 @@ def convert_deploy(model: GraphModule, net_type='CNN',
                 def forward(self, input_0, input_1):
                     pass
     """
+
+    for name1, param1 in model.named_parameters():
+        for name2, param2 in model.named_parameters():
+            if name1 != name2 and param1.shape == param2.shape and torch.equal(param1, param2):
+                print(f'Waring:{name1} and {name2} has same shape and same value, \
+                       please use Use a random initialization algorithm to optimize learnable parameters')
+                assert(False)
+
     quant_type_dict = get_quant_type_from_fakequant_type(model)
     kwargs = {
         'input_shape_dict': input_shape_dict,
