@@ -485,7 +485,7 @@ def main_worker(gpu, ngpus_per_node, args):
             {'data': [args.batch_size, 3, 224, 224]},
             model_name='{}'.format(args.arch),
             output_path=args.output_path, bf16_mix_prec = args.bf16_mix_prec, not_gen_bmodel = True,
-            mlir_deploy = True, val_loader = val_loader, chip = args.chip, param_check = True)
+            mlir_deploy = True, val_loader = val_loader, chip = args.chip, param_check = False)
         mlir_cuda = pymlir.cuda()
         mlir_cuda.load(mlir_model_path)
         output_names = mlir_cuda.output_names

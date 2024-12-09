@@ -339,7 +339,7 @@ class LinearQuantizer_process(object):
                 nodes_to_be_removed.extend(redundant_nodes)
                 self.clip_weight(node, name2data, inp2node, named_initializer, quant_type_dict)
                 tensor_name, scale, zero_point, qmin, qmax, dtype, quant_type = self.parse_qparams(node, name2data, quant_type_dict)
-                if first_call_in and mlir_deploy:
+                if first_call_in:
                     scale_id = self.find_param_map(scale[0])
                     zero_point_id = self.find_param_map(zero_point[0])
                     self.process_param_map(node, named_initializer, inp2node, out2node, weight_name_to_unique_id_dict, tensor_name, scale_id)
@@ -372,7 +372,7 @@ class LinearQuantizer_process(object):
                     # fake quantize for weights
                     redundant_nodes = self.deal_with_weight_fakequant(node, out2node, inp2node, named_initializer)
                     tensor_name, scale, zero_point, qmin, qmax, dtype, quant_type = self.parse_qparams(node, name2data, quant_type_dict)
-                    if first_call_in and mlir_deploy:
+                    if first_call_in:
                         scale_id = self.find_param_map(scale[0])
                         zero_point_id = self.find_param_map(zero_point[0])
                         self.process_param_map(node, named_initializer, inp2node, out2node, weight_name_to_unique_id_dict, tensor_name, scale_id)
@@ -477,7 +477,7 @@ class LinearQuantizer_process(object):
         context_filename = os.path.join(output_path, '{}_clip_ranges.json'.format(model_name))
         with open(context_filename, 'w') as f:
             json.dump(context, f, indent=4)
-        if first_call_in and mlir_deploy:
+        if first_call_in:
             context_filename = os.path.join(output_path, '{}_weight_name_to_unique_id.json'.format(model_name))
             with open(context_filename, 'w') as f:
                 json.dump(weight_name_to_unique_id_dict, f, indent=4)
