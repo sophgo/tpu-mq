@@ -59,6 +59,10 @@ AF4=[-1.0,
      1.0,
 ]
 FP6E3M2=[
+    -28.0000,
+    -24.0000,
+    -20.0000,
+    -16.0000,
     -14.0000,
     -12.0000,
     -10.0000,
@@ -113,57 +117,77 @@ FP6E3M2=[
     8.0000,
     10.0000,
     12.0000,
-    14.0000
+    14.0000,
+    16.0000,
+    20.0000,
+    24.0000,
+    28.0000
 ]
 
 FP6E2M3=[
-    -3.5000,
-    -3.0000,
-    -2.5000,
-    -2.0000,
-    -1.7500,
-    -1.5000,
-    -1.2500,
-    -1.0000,
-    -0.8750,
-    -0.7500,
-    -0.6250,
-    -0.5000,
-    -0.4375,
-    -0.3750,
-    -0.3750,
-    -0.3125,
-    -0.2500,
-    -0.2500,
-    -0.1875,
-    -0.1250,
-    -0.1250,
-    -0.0625,
-    -0.0312,
-    0.0000 ,
-    0.0312 ,
-    0.0625 ,
-    0.1250 ,
-    0.1250 ,
-    0.1875 ,
-    0.2500 ,
-    0.2500 ,
-    0.3125 ,
-    0.3750 ,
-    0.3750 ,
-    0.4375 ,
-    0.5000 ,
-    0.6250 ,
-    0.7500 ,
-    0.8750 ,
-    1.0000 ,
-    1.2500 ,
-    1.5000 ,
-    1.7500 ,
-    2.0000 ,
-    2.5000 ,
-    3.0000 ,
-    3.5000
+    -7.5,
+    -7.0,
+    -6.5,
+    -6.0,
+    -5.5,
+    -5.0,
+    -4.5,
+    -4.0,
+    -3.75,
+    -3.5,
+    -3.25,
+    -3.0,
+    -2.75,
+    -2.5,
+    -2.25,
+    -2.0,
+    -1.875,
+    -1.75,
+    -1.625,
+    -1.5,
+    -1.375,
+    -1.25,
+    -1.125,
+    -1.0,
+    -0.875,
+    -0.75,
+    -0.625,
+    -0.5,
+    -0.375,
+    -0.25,
+    -0.125,
+    0.0,
+    0.125,
+    0.25,
+    0.375,
+    0.5,
+    0.625,
+    0.75,
+    0.875,
+    1.0,
+    1.125,
+    1.25,
+    1.375,
+    1.5,
+    1.625,
+    1.75,
+    1.875,
+    2.0,
+    2.25,
+    2.5,
+    2.75,
+    3.0,
+    3.25,
+    3.5,
+    3.75,
+    4.0,
+    4.5,
+    5.0,
+    5.5,
+    6.0,
+    6.5,
+    7.0,
+    7.5
 ]
 FP4_BNB = [-12.0, -8.0, -6.0, -4.0, -3.0, -2.0, -0.0625, 0, 0.0625, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0]
 FP4_E2M1 = [-6.0, -4.0, -3.0, -2.0, -1.5, -1.0, -0.0625, 0, 0.0625, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0]
@@ -260,10 +284,17 @@ class FPXGROUPFakeQuantize(QuantizeBase):
         self.register_buffer('scale', torch.tensor([1.0], dtype=torch.float))
         self.register_buffer('zero_point', torch.tensor([0], dtype=torch.int))
         self.load_state_dict_hook = PerChannelLoadHook(self)
-        self.data_type="fp4_e2m1"
+        import os
+        bench_dtype = os.getenv("BENCH_DTYPE", default="fp6_e3m2")
+        bench_groupsize = os.getenv("BENCH_GROUPSIZE", default=128)
+        per_chan = os.getenv("BENCH_PERCHAN", default=0)
+        #self.data_type="fp6_e3m2"
+        self.data_type=bench_dtype
         self.quantile=1.0
         self.return_int=False
-        self.group_size=128
+        #self.group_size=bench_groupsize
+        self.group_size=int(bench_groupsize)
+        self.per_chan=int(per_chan)
         self.double_quant=False
         self.double_quant_dtype="E4M3_RNE"
         self.printed=False
@@ -289,15 +320,17 @@ class FPXGROUPFakeQuantize(QuantizeBase):
         if self.fake_quant_enabled[0] == 1:
             Xs=X.shape[1]
             if not self.printed:
-                print(f'Group size is {self.group_size}')
+                print(f'Group size is {self.group_size} datatype is {self.data_type} double quant is {self.double_quant}')
                 self.printed=True
             if self.group_size > 0:
                 X= X.reshape((-1, self.group_size))
-                X= X.reshape((-1, Xs))
+                if self.per_chan == 1:
+                    X= X.reshape((-1, Xs))
                 _scale = X.abs().max(1)[0] * self.quantile/ max(allow_data)
             else:
                 X= X.flatten()
-                X= X.reshape((-1, Xs))
+                if self.per_chan == 1:
+                    X= X.reshape((-1, Xs))
                 _scale = X.abs().max() * self.quantile/ max(allow_data)
             #scale quantize
             if self.double_quant:
