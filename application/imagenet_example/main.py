@@ -261,7 +261,7 @@ def main_worker(gpu, ngpus_per_node, args):
         print(f'load pretrained checkpoint from: {args.model_path}')
         model.load_state_dict(state_dict)
 
-    train_loader, train_sampler, val_loader, cali_loader = prepare_dataloader(args)
+    train_loader, train_sampler, val_loader, cali_loader, fused_val_loader = prepare_dataloader(args)
     criterion = nn.CrossEntropyLoss().cuda(args.cuda)
     criterion_cpu = nn.CrossEntropyLoss()
     if args.cuda is not None:
@@ -509,7 +509,11 @@ def main_worker(gpu, ngpus_per_node, args):
             print('qat训练后的带量化节点的eval精度:')
         else:
             print(f'epoch{epoch}训练后eval精度:')
-        validate(val_loader, model, criterion, args, criterion_cpu)
+        if args.fuse_preprocess:
+            tmp_val_loader = fused_val_loader
+        else:
+            tmp_val_loader = val_loader
+        validate(tmp_val_loader, model, criterion, args, criterion_cpu, fuse_preprocess=args.fuse_preprocess, customization_format=args.customization_format, aligned_input=args.aligned_input)
 
     # gen_test_ref_data(cali_loader, model, args)
     print('>>>>>>Generate the model for final deployment on the chip:')
@@ -517,6 +521,36 @@ def main_worker(gpu, ngpus_per_node, args):
         {'data': [args.deploy_batch_size, 3, 224, 224]},
         model_name='{}'.format(args.arch),
         output_path=args.output_path, bf16_mix_prec = args.bf16_mix_prec, mlir_deploy=args.use_tpu_mlir_fwd, chip=args.chip, val_loader=val_loader, fuse_preprocess=args.fuse_preprocess, customization_format=args.customization_format, aligned_input=args.aligned_input)
+
+class ToTensorWithoutNormalization:
+    def __call__(self, pic):
+        """
+        Args:
+            pic (PIL Image): Image to be converted to tensor.
+
+        Returns:
+            Tensor: Converted image.
+        """
+        # Convert the PIL Image to a numpy array
+        np_img = np.array(pic)
+        # If the image is in RGB or RGBA, convert it to HWC format
+        if len(np_img.shape) == 3:
+            # HWC format
+            np_img = np.transpose(np_img, axes=(2, 0, 1))
+            # if mlir in rgb format
+            rgb = False
+            if rgb:
+                np_img = np_img[[2,1,0],:,:]
+        else:
+            # HxW format (grayscale image)
+            np_img = np.expand_dims(np_img, axis=-1)
+        # Convert the numpy array to a torch Tensor
+        tensor_img = torch.from_numpy(np_img)
+
+        # Ensure the tensor has float32 dtype
+        tensor_img = tensor_img.to(dtype=torch.float32)
+
+        return tensor_img
 
 def prepare_dataloader(args):
     traindir = os.path.join(args.train_data, 'train')
@@ -555,7 +589,18 @@ def prepare_dataloader(args):
         val_dataset,
         batch_size=args.batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=True)
-    return train_loader, train_sampler, val_loader, cali_loader
+
+    fused_val_dataset = datasets.ImageFolder(valdir, transforms.Compose([
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            ToTensorWithoutNormalization()
+        ]))
+    fused_val_loader = torch.utils.data.DataLoader(
+        fused_val_dataset,
+        batch_size=args.batch_size, shuffle=False,
+        num_workers=args.workers, pin_memory=True)
+
+    return train_loader, train_sampler, val_loader, cali_loader, fused_val_loader
 
 def prepare_dataloader_batch(args, batch_size):
     valdir = os.path.join(args.val_data, 'val')
@@ -784,7 +829,7 @@ def train(train_loader, model, criterion, criterion_cpu, optimizer, epoch, args,
         s_time = time.time()
 
 
-def validate(val_loader, model, criterion, args, criterion_cpu = None, force_use_gpu = False):
+def validate(val_loader, model, criterion, args, criterion_cpu = None, force_use_gpu = False, fuse_preprocess=False, customization_format="", aligned_input=False):
     batch_time = AverageMeter('Time', ':6.3f')
     meters = [batch_time]
     if 'show_gpu_status' in args.debug_cmd or force_use_gpu:
@@ -803,11 +848,20 @@ def validate(val_loader, model, criterion, args, criterion_cpu = None, force_use
         prefix='Test: ')
 
     if args.use_tpu_mlir_fwd and not force_use_gpu:
-        mlir_model_path = convert_deploy(model.eval(), 'CNN', input_shape_dict=
-            {'data': [args.batch_size, 3, 224, 224]},
-            model_name='{}'.format(args.arch),
-            output_path=args.output_path, bf16_mix_prec = args.bf16_mix_prec, 
-            mlir_deploy = True, val_loader = val_loader, chip = args.chip)
+        if fuse_preprocess:
+            print('convet deploy in validate fused')
+            mlir_model_path = convert_deploy(model.eval(), 'CNN', input_shape_dict=
+                {'data': [args.batch_size, 3, 224, 224]},
+                model_name='{}'.format(args.arch),
+                output_path=args.output_path, bf16_mix_prec = args.bf16_mix_prec,
+                mlir_deploy = True, val_loader = val_loader, chip = args.chip,
+                fuse_preprocess=fuse_preprocess, customization_format=customization_format, aligned_input=aligned_input)
+        else:
+            mlir_model_path = convert_deploy(model.eval(), 'CNN', input_shape_dict=
+                {'data': [args.batch_size, 3, 224, 224]},
+                model_name='{}'.format(args.arch),
+                output_path=args.output_path, bf16_mix_prec = args.bf16_mix_prec,
+                mlir_deploy = True, val_loader = val_loader, chip = args.chip)
         mlir_cuda = pymlir.cuda()
         mlir_cuda.load(mlir_model_path)
         output_names = mlir_cuda.output_names
@@ -837,7 +891,10 @@ def validate(val_loader, model, criterion, args, criterion_cpu = None, force_use
                 top5.update(acc5[0], images.size(0))
             
             if args.use_tpu_mlir_fwd and not force_use_gpu:
-                mlir_cuda.set_tensor('data', images.cpu().numpy())
+                if args.fuse_preprocess:
+                    mlir_cuda.set_tensor('data_raw', images.cpu().numpy())
+                else:
+                    mlir_cuda.set_tensor('data', images.cpu().numpy())
                 mlir_cuda.invoke()
                 output = mlir_cuda.get_tensor(output_names[0])
                 output = torch.from_numpy(output)
