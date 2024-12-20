@@ -509,7 +509,7 @@ def main_worker(gpu, ngpus_per_node, args):
             print('qat训练后的带量化节点的eval精度:')
         else:
             print(f'epoch{epoch}训练后eval精度:')
-        validate(val_loader, model, criterion, args, criterion_cpu, force_use_gpu=True)
+        validate(val_loader, model, criterion, args, criterion_cpu)
 
     # gen_test_ref_data(cali_loader, model, args)
     print('>>>>>>Generate the model for final deployment on the chip:')
