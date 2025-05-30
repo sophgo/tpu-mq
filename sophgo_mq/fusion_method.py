@@ -1,14 +1,17 @@
 import torch
 import torch.nn.intrinsic.qat as nniqat
 from torch.nn.utils.fusion import fuse_conv_bn_eval, fuse_linear_bn_eval
-
-# turn foo.bar -> ['foo', 'bar']
-def _parent_name(target):
-    r = target.rsplit('.', 1)
-    if len(r) == 1:
-        return '', r[0]
-    else:
-        return r[0], r[1]
+_version_under_1100 = (int(torch.__version__.split('.')[1]) < 10) and (int(torch.__version__.split('.')[0]) == 1)
+if _version_under_1100:
+    # turn foo.bar -> ['foo', 'bar']
+    def _parent_name(target):
+        r = target.rsplit('.', 1)
+        if len(r) == 1:
+            return '', r[0]
+        else:
+            return r[0], r[1]
+else:
+    from torch.ao.quantization.utils import _parent_name
 
 import sophgo_mq.nn.intrinsic as qnni
 import sophgo_mq.nn.intrinsic.qat as qnniqat
@@ -66,7 +69,7 @@ def convert_qnnqat_deconv2d(model, fused_node):
     deconv.weight = fused_module.weight
     if fused_module.bias is not None:
         deconv.bias = fused_module.bias
-    fused_deconv = fuse_deconv_bn_eval(deconv.eval(), fused_module.bn)
+    fused_deconv = fuse_deconv_bn_eval(deconv.eval(), fused_module.bn.eval())
     fused_deconv.qconfig = fused_module.qconfig
     fused_deconv = qnnqat.ConvTranspose2d.from_float(fused_deconv)
     fused_deconv.weight_fake_quant = fused_module.weight_fake_quant
@@ -122,7 +125,7 @@ def convert_qnniqat_linearbn(model, fused_node):
     if fused_module.bias is not None:
         linear.bias = fused_module.bias
     # Merge Linear + BN
-    fused_linear = fuse_linear_bn_eval(linear.eval(), fused_module.bn)
+    fused_linear = fuse_linear_bn_eval(linear.eval(), fused_module.bn.eval())
     # We need nn.qat.linear here to export weight quantize node.
     fused_linear.qconfig = fused_module.qconfig
     fused_linear = torch.nn.qat.Linear.from_float(fused_linear)
@@ -164,7 +167,7 @@ def convert_nniqat_convbn(model, fused_node):
     conv.weight = fused_module.weight
     if fused_module.bias is not None:
         conv.bias = fused_module.bias
-    fused_conv = fuse_conv_bn_eval(conv.eval(), fused_module.bn)
+    fused_conv = fuse_conv_bn_eval(conv.eval(), fused_module.bn.eval())
     # We need nn.qat.conv here to export weight quantize node.
     fused_conv.qconfig = fused_module.qconfig
     fused_conv = fused_qat_module_class_map[type(conv)].from_float(fused_conv)
@@ -271,7 +274,7 @@ def convert_qnniqat_deconvbn(model, fused_node):
     deconv.weight = fused_module.weight
     if fused_module.bias is not None:
         deconv.bias = fused_module.bias
-    fused_deconv = fuse_deconv_bn_eval(deconv.eval(), fused_module.bn)
+    fused_deconv = fuse_deconv_bn_eval(deconv.eval(), fused_module.bn.eval())
     # We need nn.qat.conv here to export weight quantize node.
     fused_deconv.qconfig = fused_module.qconfig
     fused_deconv = qnnqat.ConvTranspose2d.from_float(fused_deconv)
@@ -353,7 +356,7 @@ def convert_qnniqat_convbn(model, fused_node):
     conv.weight = fused_module.weight
     if fused_module.bias is not None:
         conv.bias = fused_module.bias
-    fused_conv = fuse_conv_bn_eval(conv.eval(), fused_module.bn)
+    fused_conv = fuse_conv_bn_eval(conv.eval(), fused_module.bn.eval())
     # We need nn.qat.conv here to export weight quantize node.
     fused_conv.qconfig = fused_module.qconfig
     fused_conv = qnnqat.Conv2d.from_float(fused_conv)

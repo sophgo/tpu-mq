@@ -34,6 +34,7 @@ from sophgo_mq.utils.logger import logger
 from sophgo_mq.utils.registry import register_model_quantizer
 import sophgo_mq.nn.intrinsic.qat as qnniqat
 import sophgo_mq.nn.qat as qnnqat
+from sophgo_mq.fake_quantize.lsq import LearnableFakeQuantize
 
 class ModelQuantizer(object):
     """General model quantizer class.
@@ -363,6 +364,21 @@ class ModelQuantizer(object):
             if not isinstance(mod, _FusedModule):
                 self._convert(mod, mapping, True, new_scope)
             reassign[name] = swap_module(mod, mapping, {})
+            
+            if (
+                getattr(reassign[name].qconfig.weight.p, 'func', None) is LearnableFakeQuantize  
+                and reassign[name].qconfig.weight.p.keywords['ch_axis'] != -1
+                and hasattr(reassign[name], 'weight_fake_quant')
+            ):  
+                channels_len = -2
+                if hasattr(reassign[name], 'out_channels'):
+                    channels_len = reassign[name].out_channels
+                if hasattr(reassign[name], 'out_features'):
+                    channels_len = reassign[name].out_features
+                assert channels_len != -2, "Can not find out_channels or out_features"
+                reassign[name].weight_fake_quant.scale = torch.nn.Parameter(torch.tensor([1.] * channels_len))
+                reassign[name].weight_fake_quant.zero_point = torch.nn.Parameter(torch.tensor([0.] * channels_len))
+
         for key, value in reassign.items():
             module._modules[key] = value
 

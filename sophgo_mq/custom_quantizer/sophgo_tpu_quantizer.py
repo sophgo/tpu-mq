@@ -156,7 +156,8 @@ class SophgoTpuQuantizer(ModelQuantizer):
     def _passed_module_type(self):
         return (
             torch.nn.ReLU,
-            torch.nn.ReLU6
+            torch.nn.ReLU6,
+            torch.nn.Dropout
         )
 
     @property

@@ -12,7 +12,7 @@ if torch.cuda.is_available():
     from sophgo_mq.FP8_Emulator.pytquant.cuda import fpemu_cuda
 from torch.quantization.fake_quantize import _is_per_channel, _is_per_tensor
 
-_version_under_1100 = int(torch.__version__.split('.')[1]) < 10
+_version_under_1100 = int(torch.__version__.split('.')[0]) == 1 and int(torch.__version__.split('.')[1]) < 10
 # List the supported rounding method for E4M3:
 mode_list = ["E4M3_IEEE_RNE", "E4M3_IEEE_STOCHASTIC", "E4M3_RNE", "E4M3_STOCHASTIC"]
 # Get the config

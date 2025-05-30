@@ -1,6 +1,6 @@
 import torch
 import unittest
-
+import torchvison
 from sophgo_mq.prepare_by_platform import prepare_by_platform, BackendType
 from sophgo_mq.convert_deploy import convert_merge_bn
 from sophgo_mq.utils.state import enable_calibration, enable_quantization
@@ -22,7 +22,7 @@ class TestProfiling(unittest.TestCase):
         }
         prepare_custom_config_dict = {'extra_qconfig_dict': extra_qconfig_dict}
         # First model
-        model_1 = torch.hub.load(GITHUB_RES, 'resnet18', pretrained=False)
+        model_1 = torchvison.models.resnet18(pretrained=False)
         model_1 = prepare_by_platform(model_1, BackendType.Tensorrt, prepare_custom_config_dict)
         model_1.train()
         enable_calibration(model_1)
