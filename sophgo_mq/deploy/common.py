@@ -39,6 +39,8 @@ class ONNXGraph(object):
 
     def set_initializer(self, initializer_name, value_tensor, raw=True):
         idx = None
+        if value_tensor.shape == () and value_tensor.size == 1:
+            value_tensor.shape = 1
         if initializer_name in self.initializer:
             idx = self.initializer[initializer_name][1]
         if raw:

@@ -107,7 +107,7 @@ def convert_onnx(model: GraphModule, input_shape_dict, dummy_input, onnx_model_p
         input_names = list(dummy_input.keys())
         dummy_input = tuple(dummy_input.values())
     # Per-channel QuantizeLinear and DequantizeLinear is supported since opset 13
-    opset_version = 13 if kwargs.get('deploy_to_qlinear', False) else 11
+    opset_version = 13 if kwargs.get('deploy_to_qlinear', False) else 13
     # opset_version = 18
 
     # open all fake quant node to export
@@ -131,7 +131,7 @@ def convert_onnx(model: GraphModule, input_shape_dict, dummy_input, onnx_model_p
     simplified_model = None
     with torch.no_grad():
         try:
-            from torch.onnx.utils import ONNXCheckerError
+            from torch.onnx import ValidationError as ONNXCheckerError
             try:
                 torch.onnx.export(model, dummy_input, onnx_model_path,
                                 input_names=input_names,
@@ -210,7 +210,7 @@ def convert_onnx(model: GraphModule, input_shape_dict, dummy_input, onnx_model_p
     if quant_mode != "FP8":
         with torch.no_grad():
             try:
-                from torch.onnx.utils import ONNXCheckerError
+                from torch.onnx import ValidationError as ONNXCheckerError
                 try:
                     torch.onnx.export(model, dummy_input, onnx_model_path,
                                     input_names=input_names,

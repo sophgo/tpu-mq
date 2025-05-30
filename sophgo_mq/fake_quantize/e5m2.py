@@ -11,7 +11,7 @@ from sophgo_mq.FP8_Emulator.pytquant.cpp import fpemu_cpp
 if torch.cuda.is_available():
     from sophgo_mq.FP8_Emulator.pytquant.cuda import fpemu_cuda
 
-_version_under_1100 = int(torch.__version__.split('.')[1]) < 10
+_version_under_1100 = int(torch.__version__.split('.')[0]) == 1 and int(torch.__version__.split('.')[1]) < 10
 # List the supported rounding method for E5M2:
 mode_list = ["E5M2_RTE", "E5M2_RNE", "E5M2_STOCHASTIC", "E5M2_RNAZ",
              "E5M2_RNTZ", "E5M2_RPINF", "E5M2_RNINF", "E5M2_DAZ_RNE", 

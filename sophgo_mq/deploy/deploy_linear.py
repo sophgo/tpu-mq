@@ -311,7 +311,8 @@ class LinearQuantizer_process(object):
                                                     'ori_name': scale_name[:len(scale_name)-len(post_str)] if scale_name.endswith(post_str) else 'none'}
 
         for node in nodes_to_be_removed:
-            graph.node.remove(node)
+            if node in graph.node:
+                graph.node.remove(node)
         # delete initializer
         out2node, inp2node = update_inp2node_out2node(graph)
         named_initializer = prepare_initializer(graph)
