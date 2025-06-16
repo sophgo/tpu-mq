@@ -11,6 +11,14 @@ def enable_calibration(model):
             submodule.enable_observer()
             submodule.disable_fake_quant()
 
+def set_fakeq_name(model):
+    logger.info('set the name of fake quantizers')
+    for name, submodule in model.named_modules():
+        logger.debug(f'checking {name} {isinstance(submodule, torch.quantization.FakeQuantizeBase)} {type(submodule)}')
+        if isinstance(submodule, torch.quantization.FakeQuantizeBase):
+            print('set fake quant name : {}'.format(name))
+            submodule.set_fake_quant_name(name)
+
 def enable_calibration_woquantization(model, quantizer_type='fake_quant'):
     logger.info('Enable observer and Disable quantize for {}'.format(quantizer_type))
     for name, submodule in model.named_modules():
