@@ -10,7 +10,7 @@ jobs:
 
     steps:
     - name: Checkout Repository
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
       with:
           ref: ${{ github.event.pull_request.head.sha }}
     - name: Print PR number and title
@@ -21,7 +21,7 @@ jobs:
         CURRENT_BRANCH=$(echo ${{ github.ref }} | sed 's|^refs/heads/||')
         echo "Current branch name: $CURRENT_BRANCH"        
     - name: Cache Docker images
-      uses: actions/cache@v2
+      uses: actions/cache@v4
       with:
         path: |
           ~/.docker
