@@ -299,11 +299,46 @@ class ModelQuantizer(object):
         else:
             flattned_args.extend([node])
         return flattned_args
+
+    def find_shape_ops(self, nodes) -> List[str]:
+        shape_nodes = []
+        for node in nodes:
+            if node.op == 'call_function' and 'getitem' in node.name:
+                if node.args[0].target=="size":
+                    print(f'shape op {node.name}')
+                    shape_nodes.append(node.name)
+                    continue
+            if node.op == 'call_function' and 'getattr' in node.name:
+                if node.args[1]=="shape" or node.args[1]=="ndim":
+                    print(f'shape op {node.name}')
+                    shape_nodes.append(node.name)
+                    continue
+        for node in nodes:
+            if node.name in shape_nodes:
+                continue
+            if node.op == 'call_function' and 'getitem' in node.name:
+                if len(node.args) > 1 and node.args[0].name in shape_nodes:
+                    print(f'shape op {node.name}')
+                    shape_nodes.append(node.name)
+                    continue
+            op_on_shape = False
+            for _node in self._flatten_args(node.all_input_nodes):
+                if _node.name in shape_nodes:
+                    op_on_shape = True
+                    break
+            if op_on_shape:
+                if (node.op == 'call_function' or node.op == 'call_method') and (node.target == 'new_empty' or node.target == 'view' or node.target == 'reshape'):
+                    continue
+                else:
+                    print(f'shape op calc {_node.name} op on {node.name}')
+                    shape_nodes.append(node.name)
+        return shape_nodes
     def _find_act_quants(self, model: GraphModule) -> List:
         nodes = list(model.graph.nodes)
         modules = dict(model.named_modules())
         node_need_to_quantize_output = []
         g2node = getitem2node(model)
+        shape_nodes = self.find_shape_ops(nodes)
         for node in nodes:
             if node.name=="bert_encoder_layer_11_output_layer_norm":
                 node_need_to_quantize_output.append(node)
@@ -312,6 +347,9 @@ class ModelQuantizer(object):
                  node.target in self.exclude_function_type) or
                     node.name in self.exclude_node_name) and node.name not in self.additional_node_name:
                 logger.info("Exclude skip: {}".format(node.name))
+                continue
+            if (node.op == 'call_function' or node.op == 'call_method') and node.target == 'new_empty':
+                logger.debug('>>>>> skip node ', node.name, ' by new_empty')
                 continue
             if (node.op == 'call_function' and node.target in self._passed_func_type) or \
                 (node.op == 'call_module' and isinstance(modules[node.target], self._passed_module_type)):
@@ -326,9 +364,23 @@ class ModelQuantizer(object):
                 for _node in input_node_list:
                     if _node.target in ["type_as","long"] or _node.name in ['arange','pixel_values'] or _node.target in [operator.mod,operator.floordiv]:#,"expand","to","long"]:
                         continue
+                    if _node.name in shape_nodes:
+                        logger.info(f'skip input shape op {_node.name}')
+                        continue
                     if _node.op == 'call_function' and 'getitem' in _node.name:
                         if _node.args[0].target=="size":
-                            continue   
+                            logger.info(f'skip shape op {_node.name}')
+                            shape_nodes.append(_node.name)
+                            continue
+                        if len(_node.args) > 1 and _node.args[0].target in shape_nodes:
+                            logger.info(f'skip shape op calc {_node.name} op on {_node.args[0].target}')
+                            shape_nodes.append(_node.name)
+                            continue
+                    if _node.op == 'call_function' and 'getattr' in _node.name:
+                        if _node.args[1]=="shape" or _node.args[1]=="ndim":
+                            print(f'skip shape op {_node.name}')
+                            shape_nodes.append(_node.name)
+                            continue
                     if self._is_implicit_merge(modules, (node, _node)):
                         logger.info("Implicit merge: {} + {}".format(_node.name, node.name))
                         continue
@@ -340,7 +392,7 @@ class ModelQuantizer(object):
                     if _node in g2node:
                         _node = g2node[_node]
                     node_need_to_quantize_output.append(_node)
-        return node_need_to_quantize_output
+        return node_need_to_quantize_output, shape_nodes
 
     def _qat_swap_modules(self, root: GraphModule, additional_qat_module_mapping: Dict[Callable, Callable]):
         all_mappings = get_combined_dict(

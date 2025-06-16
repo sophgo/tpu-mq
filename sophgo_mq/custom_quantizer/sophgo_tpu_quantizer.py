@@ -453,7 +453,7 @@ class SophgoTpuQuantizer(ModelQuantizer):
     def _find_act_quants(self, model: GraphModule) -> list:
         nodes = list(model.graph.nodes)
         modules = dict(model.named_modules())
-        node_need_to_quantize_output = super()._find_act_quants(model)
+        node_need_to_quantize_output, shape_nodes = super()._find_act_quants(model)
         self.only_enable_ob = []
         if self.strategy == 'Transformer':
             for node in nodes:
@@ -465,6 +465,12 @@ class SophgoTpuQuantizer(ModelQuantizer):
                     ((node.op == 'call_function' or node.op == 'call_method') and
                     node.target in self.exclude_function_type) or \
                         node.name in self.exclude_node_name:
+                    continue
+                if (node.op == 'call_function' or node.op == 'call_method') and node.target == 'new_empty':
+                    logger.debug('>>>>> skip node ', node.name, ' by new_empty')
+                    continue
+                if node.name in shape_nodes:
+                    logger.debug('>>>>> skip node ', node.name, ' by shape op')
                     continue
                 if (node.op == "call_module" and isinstance(modules[node.target], self.module_type_to_quant_input)) or \
                     ((node.op == 'call_function' or node.op == 'call_method') and
