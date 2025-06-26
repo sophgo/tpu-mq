@@ -39,6 +39,7 @@ class LearnableFakeQuantize(QuantizeBase):
 
     def forward(self, X):
         x_ori = X
+        orig_dtype = X.dtype
         # Learnable fake quantize have to zero_point.float() to make it learnable.
         if self.observer_enabled[0] == 1:# or self.only_enable_observer:
             self.activation_post_process(X.detach())
@@ -78,9 +79,9 @@ class LearnableFakeQuantize(QuantizeBase):
                         self.quant_min, self.quant_max, grad_factor)
                 else:
                     X = _fake_quantize_learnable_per_channel_affine_training(
-                        X, self.scale, self.zero_point, self.ch_axis,
+                        X.float(), self.scale, self.zero_point, self.ch_axis,
                         self.quant_min, self.quant_max, grad_factor)
-                x_ori = X
+                x_ori = X.to(orig_dtype)
             else:
                 if self.use_grad_scaling:
                     grad_factor = 1.0 / (X.numel() * self.quant_max) ** 0.5
@@ -90,9 +91,9 @@ class LearnableFakeQuantize(QuantizeBase):
                 # if self.only_enable_observer:
                 #     scale, zero_point = 1, 0
                 X = torch._fake_quantize_learnable_per_tensor_affine(
-                    x_ori, scale, zero_point,
+                    x_ori.float(), scale, zero_point,
                     self.quant_min, self.quant_max, grad_factor)
-                diff = x_ori - X
+                diff = x_ori - X.to(orig_dtype)
                 if self.only_enable_observer:
                     x_ori = X + diff.detach()
                 else:
