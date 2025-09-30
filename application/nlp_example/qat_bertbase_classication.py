@@ -15,14 +15,14 @@ from transformers.utils.fx import HFTracer
 from transformers.onnx.features import FeaturesManager
 from datasets import load_dataset
 import torch.optim as optim
-from sophgo_mq.convert_deploy import convert_deploy, convert_onnx
-from sophgo_mq.prepare_by_platform import prepare_by_platform
-from sophgo_mq.utils.state import enable_calibration, enable_quantization, disable_all
+from tpu_mq.convert_deploy import convert_deploy, convert_onnx
+from tpu_mq.prepare_by_platform import prepare_by_platform
+from tpu_mq.utils.state import enable_calibration, enable_quantization, disable_all
 from transformers import logging
 import matplotlib.pyplot as plt
 import torch.onnx 
 
-parser = argparse.ArgumentParser(description='sophgo_mq bertbase Training')
+parser = argparse.ArgumentParser(description='tpu_mq bertbase Training')
 
 parser.add_argument('--epochs', default=1, type=int, metavar='N',
                     help='number of total epochs to run')

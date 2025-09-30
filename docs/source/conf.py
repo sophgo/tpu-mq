@@ -6,9 +6,9 @@
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
-project = 'Sophgo-mq'
-copyright = '2024, Sophgo'
-author = 'Sophgo'
+project = 'tpu-mq'
+copyright = '2024, tpu'
+author = 'tpu'
 release = '1.0.0'
 
 # -- General configuration ---------------------------------------------------
@@ -89,7 +89,7 @@ html_static_path = ['../assets']
 # -- Options for HTMLHelp output ---------------------------------------------
 
 # Output file base name for HTML help builder.
-htmlhelp_basename = "Sophgo-mq Quick Start"
+htmlhelp_basename = "tpu-mq Quick Start"
 
 
 # 图片和表格自动编号
@@ -140,7 +140,7 @@ latex_elements = {
     \fancypagestyle{normal}{
         \fancyhead[R]{}
         \fancyhead[C]{\leftmark}
-        \fancyfoot[C]{Copyright © SOPHGO}
+        \fancyfoot[C]{Copyright © tpu}
         \fancyfoot[R]{\thepage}
         \renewcommand{\headrulewidth}{0.4pt}
         \renewcommand{\footrulewidth}{0pt}

@@ -1,7 +1,7 @@
 {
 	"folders": [
 		{
-			"path": "../../opt/conda/lib/python3.7/site-packages/sophgo-mq-1.0.0-py3.7.egg/sophgo_mq"
+			"path": "../../opt/conda/lib/python3.7/site-packages/tpu-mq-1.0.0-py3.7.egg/tpu_mq"
 		},
 		{
 			"path": "."

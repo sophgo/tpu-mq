@@ -47,7 +47,7 @@ model:
 train:
     seed: 42
     output_dir: output_dir
-    #output_dir: /workspace/sophgo_mq/output_dir/
+    #output_dir: /workspace/tpu_mq/output_dir/
     overwrite_output_dir: False # use this to continue training if output_dir points to a checkpoint directory
     do_train: False
     do_eval: True

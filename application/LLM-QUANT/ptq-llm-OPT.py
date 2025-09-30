@@ -32,9 +32,9 @@ from transformers import default_data_collator
 from transformers.onnx.features import FeaturesManager
 from datasets import load_dataset,load_metric
 import torch.optim as optim
-from sophgo_mq.convert_deploy import convert_deploy, convert_onnx
-from sophgo_mq.prepare_by_platform import prepare_by_platform, BackendType
-from sophgo_mq.utils.state import enable_calibration, enable_quantization, disable_all
+from tpu_mq.convert_deploy import convert_deploy, convert_onnx
+from tpu_mq.prepare_by_platform import prepare_by_platform, BackendType
+from tpu_mq.utils.state import enable_calibration, enable_quantization, disable_all
 from transformers import logging
 import torch.onnx 
 import logging
@@ -51,11 +51,11 @@ from transformers import BertTokenizer, BertModel
 from transformers.utils.fx import HFTracer
 from deepspeed.module_inject import HFBertLayerPolicy
 import deepspeed
-from sophgo_mq.fake_quantize import global_var
+from tpu_mq.fake_quantize import global_var
 import copy
 import ipdb
 
-parser = argparse.ArgumentParser(description='sophgo_mq LLM')
+parser = argparse.ArgumentParser(description='tpu_mq LLM')
 
 parser.add_argument('--epochs', default=1, type=int, metavar='N', 
                     help='number of total epochs to run')

@@ -4,7 +4,7 @@ Alternative Precision Format
 FP8 quantization
 -------------------------------
 
-Sophgo-mq supports quantizing weights and activations in FP8 format.
+tpu-mq supports quantizing weights and activations in FP8 format.
 
 Below is a code example of performing FP8 quantization using the E4M3 format:
 

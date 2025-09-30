@@ -2,8 +2,8 @@ import inspect
 import unittest
 from itertools import chain
 
-from sophgo_mq.prepare_by_platform import prepare_by_platform, BackendType
-from sophgo_mq.convert_deploy import convert_deploy
+from tpu_mq.prepare_by_platform import prepare_by_platform, BackendType
+from tpu_mq.convert_deploy import convert_deploy
 
 
 class TestQuantizeNLPModel(unittest.TestCase):
@@ -56,7 +56,7 @@ class TestQuantizeNLPModel(unittest.TestCase):
         convert_deploy(quantized_model,
                     BackendType.Academic_NLP,
                     dummy_input=(dict(encoded_input),),
-                    model_name='bert-base-uncased-sophgo_mq',
+                    model_name='bert-base-uncased-tpu_mq',
                     input_names=list(encoded_input.keys()),
                     output_names=list(onnx_config.outputs.keys()),
                     dynamic_axes={name: axes for name, axes in chain(onnx_config.inputs.items(), onnx_config.outputs.items())}

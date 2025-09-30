@@ -57,19 +57,19 @@ Furthermore, the qconfig can also be designated by using the name of a specific 
 
 
 Specify the qconfig for certain module type. 
-Here, we specify different qconfigs for the **qnniqat.ConvBnReLU2d_sophgo** class and the **qnniqat.ConvReLU2d_sophgo** class, respectively.
+Here, we specify different qconfigs for the **qnniqat.ConvBnReLU2d_tpu** class and the **qnniqat.ConvReLU2d_tpu** class, respectively.
 
 .. code-block:: python
 
   object_type = {
-                  qnniqat.ConvBnReLU2d_sophgo: {  # qconfig for nniqat.ConvBnReLU2d_sophgo
+                  qnniqat.ConvBnReLU2d_tpu: {  # qconfig for nniqat.ConvBnReLU2d_tpu
                               'mode': 'activation',
                               'bit': '8',
                               'afakequantize': 'LearnableFakeQuantize',
                               'aobserver': 'MinMaxObserver',
                             },
                   
-                  qnniqat.ConvReLU2d_sophgo: {  # qconfig for qnniqat.ConvReLU2d_sophgo
+                  qnniqat.ConvReLU2d_tpu: {  # qconfig for qnniqat.ConvReLU2d_tpu
                               'mode': 'weight',
                               'bit': '8',
                               'wfakequantize': 'FixedFakeQuantize',

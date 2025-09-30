@@ -27,9 +27,9 @@ from torchvision.transforms import (
 from transformers.onnx.features import FeaturesManager
 from transformers.utils.fx import HFTracer, get_concrete_args
 from transformers.trainer_utils import get_last_checkpoint, EvalLoopOutput
-from sophgo_mq.convert_deploy import convert_deploy
-from sophgo_mq.prepare_by_platform import prepare_by_platform
-from sophgo_mq.utils.state import enable_quantization, enable_calibration_woquantization,enable_calibration,disable_all
+from tpu_mq.convert_deploy import convert_deploy
+from tpu_mq.prepare_by_platform import prepare_by_platform
+from tpu_mq.utils.state import enable_quantization, enable_calibration_woquantization,enable_calibration,disable_all
 
 logger = logging.getLogger("transformer")
 

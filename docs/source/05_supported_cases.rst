@@ -1,7 +1,7 @@
 Supported Cases
 =====================
 
-We have prepared ready-to-execute quantization scripts in Sophgo-MQ. In this section, we will demonstrate how to use scripts for quantizing different models.
+We have prepared ready-to-execute quantization scripts in tpu-mq. In this section, we will demonstrate how to use scripts for quantizing different models.
 
 
 
@@ -47,7 +47,7 @@ CV model QAT
       --export_onnx_before_training \
       --output_path=./
 
-Sophgo-mq also supports QAT quantization for Yolov5.
+tpu-mq also supports QAT quantization for Yolov5.
 
 .. code-block:: bash
 
@@ -66,7 +66,7 @@ Sophgo-mq also supports QAT quantization for Yolov5.
 NLP model PTQ
 -------------------------------
 
-Sophgo-mq supports PTQ quantization for the BERT model on the MRPC dataset.
+tpu-mq supports PTQ quantization for the BERT model on the MRPC dataset.
 
 .. code-block:: bash
 
@@ -79,7 +79,7 @@ Sophgo-mq supports PTQ quantization for the BERT model on the MRPC dataset.
 NLP model QAT
 -------------------------------
 
-Sophgo-mq supports QAT quantization for the BERT model on the SQuAD dataset.
+tpu-mq supports QAT quantization for the BERT model on the SQuAD dataset.
 
 .. code-block:: bash
 

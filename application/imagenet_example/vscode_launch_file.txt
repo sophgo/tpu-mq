@@ -28,7 +28,7 @@
                "--output_path=tmp_test",
               //  "--output_path=/workspace/tmp_path_1008",
                "--fast_test",
-               "--backend=sophgo_tpu", 
+               "--backend=tpu", 
                "--optim=sgd",
               //  "--backend=tensorrt_nlp",               
               //  "--deploy", 

@@ -19,7 +19,7 @@
 .. * :ref:`modindex`
 .. * :ref:`search`
 
-Welcome to sophgo-mq documentation!
+Welcome to tpu-mq documentation!
 ====================================================
 
 .. toctree::

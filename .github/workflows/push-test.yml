@@ -35,7 +35,7 @@ jobs:
         "
         pwd
         ls
-        pip show sophgo_mq
+        pip show tpu_mq
         python setup.py install
         cd test
         bash run_test_demo.sh

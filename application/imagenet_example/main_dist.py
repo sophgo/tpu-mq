@@ -18,10 +18,10 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 # import torchvision.models as models
 import models
-from sophgo_mq.convert_deploy import convert_deploy
-from sophgo_mq.prepare_by_platform import prepare_by_platform, BackendType
-from sophgo_mq.utils.state import enable_calibration, enable_quantization, disable_all
-from sophgo_mq.tools.replace_syncbn import replace_bn_to_syncbn
+from tpu_mq.convert_deploy import convert_deploy
+from tpu_mq.prepare_by_platform import prepare_by_platform, BackendType
+from tpu_mq.utils.state import enable_calibration, enable_quantization, disable_all
+from tpu_mq.tools.replace_syncbn import replace_bn_to_syncbn
 
 model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
@@ -245,7 +245,7 @@ def main_worker(gpu, ngpus_per_node, args):
         return
 
     if args.evaluate:
-        from sophgo_mq.convert_deploy import convert_merge_bn
+        from tpu_mq.convert_deploy import convert_merge_bn
         convert_merge_bn(model.eval())
         validate(val_loader, model, criterion, args)
         return

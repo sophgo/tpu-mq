@@ -1,9 +1,9 @@
 import torch
 import unittest
 import torchvison
-from sophgo_mq.prepare_by_platform import prepare_by_platform, BackendType
-from sophgo_mq.convert_deploy import convert_deploy
-from sophgo_mq.utils.state import enable_calibration, enable_quantization
+from tpu_mq.prepare_by_platform import prepare_by_platform, BackendType
+from tpu_mq.convert_deploy import convert_deploy
+from tpu_mq.utils.state import enable_calibration, enable_quantization
 
 from ..version import GITHUB_RES
 
