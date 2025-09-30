@@ -27,16 +27,16 @@ import torch.utils.data.distributed
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
-from sophgo_mq.convert_deploy import convert_deploy, deepcopy_graphmodule, export_onnx_with_fakequant_node, convert_merge_bn
-from sophgo_mq.prepare_by_platform import prepare_by_platform
-from sophgo_mq.utils.state import enable_calibration, enable_quantization, disable_all
-from sophgo_mq.utils.utils import generate_random_string, compare_files
-from sophgo_mq.fake_quantize.lsq import  LearnableFakeQuantize
+from tpu_mq.convert_deploy import convert_deploy, deepcopy_graphmodule, export_onnx_with_fakequant_node, convert_merge_bn
+from tpu_mq.prepare_by_platform import prepare_by_platform
+from tpu_mq.utils.state import enable_calibration, enable_quantization, disable_all
+from tpu_mq.utils.utils import generate_random_string, compare_files
+from tpu_mq.fake_quantize.lsq import  LearnableFakeQuantize
 try:
     import tpu_mlir
     from tools.model_runner import mlir_inference
     import pymlir
-    from sophgo_mq.mlir.tpu_utils import update_model_param
+    from tpu_mq.mlir.tpu_utils import update_model_param
 except ModuleNotFoundError:
     print("tpu_mlir not found, use gpu and cpu")
     pass
@@ -694,8 +694,8 @@ def train(train_loader, model, criterion, criterion_cpu, optimizer, epoch, args,
                     cmd_str = f"npz_tool.py compare mobilenet_v2_ref_idx{idx}_qat_top_f32_all_origin_weight.npz {weight_file_copyed} -vv"
                     print('cmd_str:', cmd_str)
                     os.system(cmd_str)
-                    cali_table = os.path.join(args.output_path, '{}_cali_table_from_sophgo_mq_sophgo_tpu'.format(args.arch))
-                    compare_files(idx, f"refdata/mobilenet_v2_ref_idx{idx}_cali_table_from_sophgo_mq_sophgo_tpu", cali_table)
+                    cali_table = os.path.join(args.output_path, '{}_cali_table_from_tpu_mq'.format(args.arch))
+                    compare_files(idx, f"refdata/mobilenet_v2_ref_idx{idx}_cali_table_from_tpu_mq", cali_table)
             else:
                 mlir_model_path = convert_deploy(model.eval(), 'CNN', input_shape_dict=
                     {'data': [batch_size, 3, 224, 224]},

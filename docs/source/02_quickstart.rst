@@ -1,7 +1,7 @@
 Quick Start
 =====================
 
-In this section, we use the PTQ INT8 quantization of ResNet-18 as an example to understand the working principles of Sophgo-mq. Let's begin step by step.
+In this section, we use the PTQ INT8 quantization of ResNet-18 as an example to understand the working principles of tpu-mq. Let's begin step by step.
 
 Import packages and define the model.
 --------------------------------------------------------------
@@ -12,9 +12,9 @@ First, you need a model that has been pre-trained with PyTorch; here we choose R
 
   import torch
   import torchvision.models as models
-  from sophgo_mq.prepare_by_platform import prepare_by_platform
-  from sophgo_mq.convert_deploy import convert_deploy
-  from sophgo_mq.utils.state import enable_quantization, enable_calibration
+  from tpu_mq.prepare_by_platform import prepare_by_platform
+  from tpu_mq.convert_deploy import convert_deploy
+  from tpu_mq.utils.state import enable_quantization, enable_calibration
 
   model = models.__dict__['resnet18']()
 

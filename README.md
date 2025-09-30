@@ -1,25 +1,25 @@
 <div align="center">
-    <img src="resources/sophgo_mq_logo.png" width="6000"  />
+    <img src="resources/tpu_mq_logo.png" width="6000"  />
 </div>
 
 ------------
 
 ## Introduction
 
-SOPHGO-mq is an open-source model quantization toolkit forked form [MQBench](https://github.com/ModelTC/MQBench). SOPHGO-mq has made some customized modifications and added some features based on MQBench.
+tpu-mq is an open-source model quantization toolkit forked form [MQBench](https://github.com/ModelTC/MQBench). tpu-mq has made some customized modifications and added some features based on MQBench.
 
-SOPHGO-mq is to provide:
+tpu-mq is to provide:
 
 - **Quantitative Scheme**. Fake quantization nodes are inserted into the PyTorch model, and users can customize the insertion points of the nodes as well as the behavior of the fake quantization nodes. After the model training is completed, the corresponding Onnx file as well as calitable and qtable will be exported.
-- **Useful Algorithms**. SOPHGO-mq supports a variety of quantization algorithms, including quantization algorithms for the CV  and NLP fields.
-- **Mixed Precision**. SOPHGO-mq supports mixed-precision quantization, which can better ensure the performance of the model after quantization.
+- **Useful Algorithms**. tpu-mq supports a variety of quantization algorithms, including quantization algorithms for the CV  and NLP fields.
+- **Mixed Precision**. tpu-mq supports mixed-precision quantization, which can better ensure the performance of the model after quantization.
 
 
 ## Installation
 
 ```shell
-git clone https://github.com/sophgo/sophgo-mq.git
-cd sophgo-mq
+git clone tpu-mq.git_project
+cd tpu-mq
 python setup.py install
 ```
 
@@ -33,9 +33,9 @@ Let's take the PTQ quantization of ResNet18 as an example.
     ```python
     import torch
     import torchvision.models as models
-    from sophgo_mq.prepare_by_platform import prepare_by_platform
-    from sophgo_mq.convert_deploy import convert_deploy
-    from sophgo_mq.utils.state import enable_quantization, enable_calibration
+    from tpu_mq.prepare_by_platform import prepare_by_platform
+    from tpu_mq.convert_deploy import convert_deploy
+    from tpu_mq.utils.state import enable_quantization, enable_calibration
 
     model = models.__dict__['resnet18']()
     ```
@@ -133,7 +133,7 @@ CUDA_VISIBLE_DEVICES=0 python application/imagenet_example/PTQ/ptq/ptq_main.py \
 ```
 
 ### CV QAT
-SOPHGO-mq supports QAT quantization for common classification models.
+tpu-mq supports QAT quantization for common classification models.
 ```Shell
 CUDA_VISIBLE_DEVICES=0 python application/imagenet_example/main.py \
     --arch=resnet18 \
@@ -153,7 +153,7 @@ CUDA_VISIBLE_DEVICES=0 python application/imagenet_example/main.py \
     --export_onnx_before_training \
     --output_path=./
 ```
-SOPHGO-mq also supports QAT quantization for Yolov5.
+tpu-mq also supports QAT quantization for Yolov5.
 ```Shell
 cd ./application/yolov5_example
 export PYTHONPATH=../../:$PYTHONPATH
@@ -168,7 +168,7 @@ CUDA_VISIBLE_DEVICES=0 python train.py \
 ```
 
 ### NLP PTQ
-SOPHGO-mq supports PTQ quantization for the BERT model on the MRPC dataset.
+tpu-mq supports PTQ quantization for the BERT model on the MRPC dataset.
 ```Shell
 cd ./application/nlp_example
 export PYTHONPATH=../../:$PYTHONPATH
@@ -177,7 +177,7 @@ python ptq.py --config config.yaml
 
 ### NLP QAT
 
-SOPHGO-mq supports QAT quantization for the BERT model on the SQuAD dataset.
+tpu-mq supports QAT quantization for the BERT model on the SQuAD dataset.
 
 ```Shell
 cd ./application/nlp_example

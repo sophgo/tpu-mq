@@ -18,9 +18,9 @@ from transformers import default_data_collator
 from transformers.onnx.features import FeaturesManager
 from datasets import load_dataset,load_metric
 import torch.optim as optim
-from sophgo_mq.convert_deploy import convert_deploy
-from sophgo_mq.prepare_by_platform import prepare_by_platform
-from sophgo_mq.utils.state import enable_calibration, enable_quantization, disable_all
+from tpu_mq.convert_deploy import convert_deploy
+from tpu_mq.prepare_by_platform import prepare_by_platform
+from tpu_mq.utils.state import enable_calibration, enable_quantization, disable_all
 from transformers import logging
 import matplotlib.pyplot as plt
 import torch.onnx 
@@ -32,7 +32,7 @@ from transformers import BertTokenizer, BertModel
 from transformers.utils.fx import HFTracer
 from transformers import Trainer, TrainingArguments, PreTrainedModel
 
-parser = argparse.ArgumentParser(description='sophgo_mq bertbase Training')
+parser = argparse.ArgumentParser(description='tpu_mq bertbase Training')
 
 parser.add_argument('--epochs', default=2, type=int, metavar='N',
                     help='number of total epochs to run')
@@ -496,7 +496,7 @@ print("**************************************************")
 # convert_deploy(model_prepared,
 #             BackendType.Academic_NLP,
 #             dummy_input=((dict(X)),),
-#             model_name='bert-base-uncased-sophgo_mq-squad'
+#             model_name='bert-base-uncased-tpu_mq-squad'
 #             ) 
 
 model_kind, model_onnx_config = FeaturesManager.check_supported_model_or_raise(model_prepared, feature='default')

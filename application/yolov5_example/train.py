@@ -30,12 +30,12 @@ import torch.nn as nn
 import yaml
 from torch.optim import lr_scheduler
 from tqdm import tqdm
-from sophgo_mq.convert_deploy import convert_deploy, convert_onnx
-from sophgo_mq.prepare_by_platform import prepare_by_platform
-from sophgo_mq.utils.state import enable_calibration, enable_quantization, disable_all
+from tpu_mq.convert_deploy import convert_deploy, convert_onnx
+from tpu_mq.prepare_by_platform import prepare_by_platform
+from tpu_mq.utils.state import enable_calibration, enable_quantization, disable_all
 
-import sophgo_mq.nn.intrinsic.qat as qnniqat
-import sophgo_mq.nn.intrinsic as qnni
+import tpu_mq.nn.intrinsic.qat as qnniqat
+import tpu_mq.nn.intrinsic as qnni
 import torch.nn.intrinsic as nni
 
 FILE = Path(__file__).resolve()
@@ -315,56 +315,56 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
         if opt.chip == "BM1688":
             prepare_custom_config_dict['quant_dict']['chip'] = 'BM1688'
             prepare_custom_config_dict['extra_qconfig_dict']['object_type'] = {
-                qnniqat.ConvBnReLU2d_sophgo: {  # qconfig for nniqat.ConvBnReLU2d_sophgo
+                qnniqat.ConvBnReLU2d_tpu: {  # qconfig for nniqat.ConvBnReLU2d_tpu
                             'mode': 'weight',
                             'bit': 4,
                             'wfakequantize': 'LearnableFakeQuantize',
                             'wobserver': 'MinMaxObserver',
                             'wperchannel': True,
                         },
-                qnniqat.ConvReLU2d_sophgo: {  # qconfig for qnniqat.ConvReLU2d_sophgo
+                qnniqat.ConvReLU2d_tpu: {  # qconfig for qnniqat.ConvReLU2d_tpu
                             'mode': 'weight',
                             'bit': 4,
                             'wfakequantize': 'LearnableFakeQuantize',
                             'wobserver': 'MinMaxObserver',
                             'wperchannel': True,
                         },
-                qnniqat.ConvBn2d_sophgo: {  # qconfig for qnniqat.ConvReLU2d_sophgo
+                qnniqat.ConvBn2d_tpu: {  # qconfig for qnniqat.ConvReLU2d_tpu
                             'mode': 'weight',
                             'bit': 4,
                             'wfakequantize': 'LearnableFakeQuantize',
                             'wobserver': 'MinMaxObserver',
                             'wperchannel': True,
                         },
-                torch.nn.Conv2d: {  # qconfig for qnniqat.ConvReLU2d_sophgo
+                torch.nn.Conv2d: {  # qconfig for qnniqat.ConvReLU2d_tpu
                             'mode': 'weight',
                             'bit': 4,
                             'wfakequantize': 'LearnableFakeQuantize',
                             'wobserver': 'MinMaxObserver',
                             'wperchannel': True,
                         },
-                nni.ConvBn2d: {  # qconfig for qnniqat.ConvReLU2d_sophgo
+                nni.ConvBn2d: {  # qconfig for qnniqat.ConvReLU2d_tpu
                             'mode': 'weight',
                             'bit': 4,
                             'wfakequantize': 'LearnableFakeQuantize',
                             'wobserver': 'MinMaxObserver',
                             'wperchannel': True,
                         },
-                nni.ConvBnReLU2d: {  # qconfig for qnniqat.ConvReLU2d_sophgo
+                nni.ConvBnReLU2d: {  # qconfig for qnniqat.ConvReLU2d_tpu
                             'mode': 'weight',
                             'bit': 4,
                             'wfakequantize': 'LearnableFakeQuantize',
                             'wobserver': 'MinMaxObserver',
                             'wperchannel': True,
                         },
-                nni.ConvReLU2d: {  # qconfig for qnniqat.ConvReLU2d_sophgo
+                nni.ConvReLU2d: {  # qconfig for qnniqat.ConvReLU2d_tpu
                             'mode': 'weight',
                             'bit': 4,
                             'wfakequantize': 'LearnableFakeQuantize',
                             'wobserver': 'MinMaxObserver',
                             'wperchannel': True,
                         },
-                nni.LinearReLU: {  # qconfig for qnniqat.ConvReLU2d_sophgo
+                nni.LinearReLU: {  # qconfig for qnniqat.ConvReLU2d_tpu
                             'mode': 'weight',
                             'bit': 4,
                             'wfakequantize': 'LearnableFakeQuantize',

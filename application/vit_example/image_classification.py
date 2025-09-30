@@ -27,9 +27,9 @@ from torchvision.transforms import (
 from transformers.onnx.features import FeaturesManager
 from transformers.utils.fx import HFTracer, get_concrete_args
 from transformers.trainer_utils import get_last_checkpoint, EvalLoopOutput
-from sophgo_mq.convert_deploy import convert_deploy
-from sophgo_mq.prepare_by_platform import prepare_by_platform, BackendType
-from sophgo_mq.utils.state import enable_quantization, enable_calibration_woquantization
+from tpu_mq.convert_deploy import convert_deploy
+from tpu_mq.prepare_by_platform import prepare_by_platform, BackendType
+from tpu_mq.utils.state import enable_quantization, enable_calibration_woquantization
 
 backends = {
     'academic': BackendType.Academic_NLP,
@@ -264,7 +264,7 @@ def main(config_path):
         model,
         backends[config.quant.backend],
         dummy_input=(export_inputs,),
-        model_name='sophgo_mq_model',
+        model_name='tpu_mq_model',
         input_names=list(onnx_config.inputs.keys()),
         output_names=list(onnx_config.outputs.keys()),
         dynamic_axes={name: axes for name, axes in chain(onnx_config.inputs.items(), onnx_config.outputs.items())}

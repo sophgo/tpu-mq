@@ -1,7 +1,7 @@
 import os
 import torch
 import setuptools
-from sophgo_mq import __version__
+from tpu_mq import __version__
 from torch.utils.cpp_extension import BuildExtension, CppExtension
 
 
@@ -17,7 +17,7 @@ ext_modules = []
 
 ext_modules.append(
         CppExtension('fpemu_cpp',
-            ['sophgo_mq/FP8_Emulator/pytquant/cpp/avx-fpemu.cpp'], #如果机子支持avx-512指令集，可以在下面添加编译512指令集的args，然后将avx-fpemu文件更换为fpemu_impl.cpp文件
+            ['tpu_mq/FP8_Emulator/pytquant/cpp/avx-fpemu.cpp'], #如果机子支持avx-512指令集，可以在下面添加编译512指令集的args，然后将avx-fpemu文件更换为fpemu_impl.cpp文件
             extra_compile_args = ["-mf16c", "-mavx2", "-mlzcnt", "-fopenmp", "-Wdeprecated-declarations"]
         ),)
 
@@ -25,17 +25,17 @@ if torch.cuda.is_available():
    from torch.utils.cpp_extension import BuildExtension, CUDAExtension
    ext_modules.append(
         CUDAExtension('fpemu_cuda', [
-            'sophgo_mq/FP8_Emulator/pytquant/cuda/fpemu_impl.cpp',
-            'sophgo_mq/FP8_Emulator/pytquant/cuda/fpemu_kernels.cu'],
+            'tpu_mq/FP8_Emulator/pytquant/cuda/fpemu_impl.cpp',
+            'tpu_mq/FP8_Emulator/pytquant/cuda/fpemu_kernels.cu'],
         ),)
 cmdclass['build_ext'] = BuildExtension
 
 setuptools.setup(
-    name="sophgo_mq",
+    name="tpu_mq",
     version=__version__,
-    author="SOPHGO Technology Co. Ltd.",
+    author="",
     author_email="",
-    description=("PTQ and Quantization aware training for SOPHGO devices."),
+    description=("PTQ and Quantization aware training."),
     ext_modules=ext_modules,
     cmdclass=cmdclass,
     url="",

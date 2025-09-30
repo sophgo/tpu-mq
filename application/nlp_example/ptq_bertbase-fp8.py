@@ -19,14 +19,14 @@ from transformers import (
 from transformers.utils.fx import HFTracer
 from transformers.onnx.features import FeaturesManager
 from itertools import chain
-from sophgo_mq.prepare_by_platform import prepare_by_platform, BackendType
-from sophgo_mq.convert_deploy import convert_deploy
-from sophgo_mq.utils.state import enable_quantization, enable_calibration_woquantization
+from tpu_mq.prepare_by_platform import prepare_by_platform, BackendType
+from tpu_mq.convert_deploy import convert_deploy
+from tpu_mq.utils.state import enable_quantization, enable_calibration_woquantization
 
 backends = {
     'academic': BackendType.Academic_NLP,
     'tensorrt': BackendType.Tensorrt_NLP,
-    'sophgo_tpu': BackendType.Sophgo_TPU
+    'tpu': BackendType.TPU
 }
 
 logger = logging.getLogger("transformer")
