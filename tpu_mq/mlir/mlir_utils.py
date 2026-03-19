@@ -184,7 +184,7 @@ def lower_net(arch, chip):
     cmd.extend([cali_param])
     #do extra conversion for differnet chips
     cmd.extend(["--processor-top-optimize"])
-    lower_param = "--convert-top-to-tpu=\"mode={} asymmetric={} doWinograd={} ignore_f16_overflow={} weightFileName={}\"".format(
+    lower_param = "--convert-top-to-tpu=\"mode={} asymmetric={} doWinograd={} high_precision={} weightFileName={}\"".format(
         mode, False, False, True, int8_weight_file)
     cmd.extend([
         lower_param,
