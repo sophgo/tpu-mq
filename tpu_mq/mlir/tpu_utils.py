@@ -197,9 +197,9 @@ def lower_net(model_name, chip, output_path, log_out = False):
     if log_out:
         print(f'convert origin mlir, time:{time.time() - s0}')
 
-    cmd_str = f"tpuc-opt {model_name}_qat.mlir --processor-assign=\"chip={chip.lower()} mode=INT8 num_device=1 num_core=1 addr_mode=auto\"  \
+    cmd_str = f"tpuc-opt {model_name}_qat.mlir --processor-assign=\"chip={chip.lower()} mode=INT8 num_device=1 num_core=1 addr_mode=auto high_precision=False\"  \
                          --import-calibration-table=\"file={cali_table} asymmetric=false\" --processor-top-optimize \
-                         --convert-top-to-tpu=\"asymmetric=false doWinograd=false ignore_f16_overflow=False q_group_size=0 matmul_perchannel=False gelu_mode=normal\" \
+                         --convert-top-to-tpu=\"asymmetric=false doWinograd=false q_group_size=0 matmul_perchannel=False gelu_mode=normal\" \
                          --canonicalize --weight-fold -o  {model_name}_qat_{chip.lower()}_int8_sym_tpu.mlir"
     if log_out:
         print(f'cmd_str:{cmd_str}')

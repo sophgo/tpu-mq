@@ -12,6 +12,10 @@ import torch.nn as nn
 import tpu_mq.nn.qat as qnnqat
 from collections import OrderedDict
 from tpu_mq.utils.logger import logger
+from tpu_mq.prepare_by_platform import ObserverDict
+from functools import partial
+import inspect
+from copy import deepcopy
 
 from tpu_mq.fake_quantize import (
     LearnableFakeQuantize,
