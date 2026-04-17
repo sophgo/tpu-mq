@@ -9,10 +9,10 @@ parser.add_argument('--debug_cmd', type=str, default='onnx,sym', help='exclude')
 opt = parser.parse_args()
 
 model_list_all=[
-  # "--arch=mobilenet_v2 --batch_size=64 --lr=1e-4",
+  # "--arch=mobilenet_v2 --batch_size=256 --lr=1e-4",
   # "--arch=resnet50 --batch_size=32 --lr=1e-4",
-  # "--arch=vgg11_bn --batch_size=32 --lr=1e-4",
-  "--arch=resnet18 --batch_size=16 --lr=1e-4",
+  # "--arch=vgg11_bn --batch_size=128 --lr=1e-4",
+  "--arch=resnet18 --batch_size=256 --lr=1e-4",
   # "--arch=shufflenet_v2_x0_5 --batch_size=320 --lr=1e-4",
   # "--arch=squeezenet1_1 --batch_size=128 --lr=1e-4",
   # "--arch=mobilenet_v3_small  --batch_size=128 --lr=1e-4"

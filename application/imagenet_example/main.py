@@ -757,9 +757,9 @@ def train(train_loader, model, criterion, criterion_cpu, optimizer, epoch, args,
             print('loss:', loss)
 
         # compute gradient and do SGD step
+        optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        optimizer.zero_grad()
 
         # measure elapsed time
         batch_time.update(time.time() - end)
@@ -860,10 +860,10 @@ def validate(val_loader, model, criterion, args, criterion_cpu = None, force_use
                     break
 
         if 'show_gpu_status' in args.debug_cmd or force_use_gpu:
-            print(' * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'
+            print(' EVAL * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'
                 .format(top1=top1, top5=top5))
         if args.use_tpu_mlir_fwd and not force_use_gpu:
-            print(' * tpu Acc@1 {top1_2.avg:.3f} tpu Acc@5 {top5_2.avg:.3f}'
+            print(' EVAL * tpu Acc@1 {top1_2.avg:.3f} tpu Acc@5 {top5_2.avg:.3f}'
                 .format(top1_2=top1_2, top5_2=top5_2))
 
     return
