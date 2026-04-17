@@ -196,21 +196,71 @@ class TpuQuantizer(ModelQuantizer):
             for _node in nodes:
                 _node.args = self._fix_succ_recursivly(_node.args, pre_node, inserted_node)
 
+    def replace_bf16_activation_quantizer(self, original_activation, new_quantizer_class):
+        params = {}
+        if hasattr(original_activation, 'p') and isinstance(original_activation.p, partial):
+            if 'observer' in original_activation.p.keywords:
+                params['observer'] = original_activation.p.keywords['observer'].__name__
+                assert params['observer'] in ObserverDict
+                params['observer'] = ObserverDict[params['observer']]
+        else:
+            return BF16FakeQuantize(None)
+        observer_kwargs = {}
+        filtered_keys = [
+            'training',
+            '_parameters',
+            '_buffers',
+            '_backward_hooks',
+            '_forward_hooks',
+            '_forward_pre_hooks',
+            '_state_dict_hooks',
+            '_load_state_dict_pre_hooks',
+            '_modules',
+            'call_super_init',
+            'factory_kwargs',
+            'device',
+            'dtype'
+        ]
+
+        if hasattr(original_activation, 'p') and isinstance(original_activation.p, partial):
+            for key, value in original_activation.p.keywords.items():
+                if key not in filtered_keys and key != 'observer':
+                    observer_kwargs[key] = value
+
+        common_params = ['quant_min', 'quant_max', 'dtype', 'qscheme',
+                        'ch_axis', 'reduce_range', 'pot_scale']
+
+        for param in common_params:
+            if hasattr(original_activation, param) and param not in observer_kwargs:
+                observer_kwargs[param] = getattr(original_activation, param)
+
+        new_params = {key:value for key,value in observer_kwargs.items() if key in common_params}
+        extra_params = {}
+        logger.debug(f"found observer {params['observer']}")
+        logger.debug(f"observer_kwargs gatherred: {observer_kwargs}")
+        logger.debug(f'new_observer_params {new_params}')
+        tmp_qconfig = BF16FakeQuantize.with_args(observer=params['observer'], **extra_params, **new_params)
+        fake_quantizer = tmp_qconfig()
+        return fake_quantizer
+
     def _insert_fake_quantizer(self, model, graph, modules, flattened_qconfig_dict, node, next_layers, fp16 = False):
         if len(next_layers) > 0:
-            layer = next_layers[0] #选其中第1个就能正确决定节点类型
-            qconfig1 = flattened_qconfig_dict.get(layer.target, None) #首先根据层名去取，优先级最高
+            layer = next_layers[0]
+            qconfig1 = flattened_qconfig_dict.get(layer.target, None)
             if qconfig1 is None and layer.target in modules:
 
-                qconfig1 = flattened_qconfig_dict.get(type(modules[layer.target]), None) #其次根据type去取
+                qconfig1 = flattened_qconfig_dict.get(type(modules[layer.target]), None)
                 if isinstance(modules[layer.target], self._layers_need_check_is_dw):
                     if modules[layer.target].groups > 1:
                         qconfig1 = None
             if qconfig1 is None:
-                qconfig1 = flattened_qconfig_dict.get('', None) #最后找全局qconfig，优先级最低
-            fake_quantizer = qconfig1.activation()
+                qconfig1 = flattened_qconfig_dict.get('', None)
+
             if fp16:
-                fake_quantizer = BF16FakeQuantize(None)
+                fake_quantizer = self.replace_bf16_activation_quantizer(qconfig1.activation, BF16FakeQuantize)
+            else:
+                fake_quantizer = qconfig1.activation()
+
             quantizer_name = layer.name + self.quantizer_prefix
             if hasattr(model, quantizer_name):
                 quantizer_name = layer.name + f'_{generate_random_string(15)}_'+ self.quantizer_prefix
@@ -222,9 +272,9 @@ class TpuQuantizer(ModelQuantizer):
                     next_layer.args = self._fix_succ_recursivly(next_layer.args, node, inserted_node)
 
     def _insert_int4_fake_quantizer_before(self, model, graph, modules, flattened_qconfig_dict, node):
-        qconfig_node = flattened_qconfig_dict.get(node.target, None) #首先根据层名去取，优先级最高
+        qconfig_node = flattened_qconfig_dict.get(node.target, None)
         if qconfig_node is None and node.target in modules:
-            qconfig_node = flattened_qconfig_dict.get(type(modules[node.target]), None) #其次根据type去取
+            qconfig_node = flattened_qconfig_dict.get(type(modules[node.target]), None)
             if isinstance(modules[node.target], self._layers_need_check_is_dw):
                 if modules[node.target].groups > 1:
                     qconfig_node = None
@@ -236,7 +286,6 @@ class TpuQuantizer(ModelQuantizer):
             return
         a_qscheme = QuantizeScheme(symmetry=True, per_channel=False, pot_scale=False, bit=4)
         a_param = {}
-        #activation_fake_quant = LearnableFakeQuantize(observer=EMAMinMaxObserver, **a_qscheme.to_observer_params())
         activation_fake_quant = qconfig_node.activation()
         activation_fake_quant.quant_min = -8
         activation_fake_quant.quant_max = 7
@@ -245,7 +294,6 @@ class TpuQuantizer(ModelQuantizer):
             quantizer_name = node.name + f'_{generate_random_string(15)}_'+ "_input_act_fake_quantizer"
         setattr(model, quantizer_name, activation_fake_quant)
         logger.info("Insert act quant {}".format(quantizer_name))
-        # 在线性层之前插入假量化器
         with graph.inserting_before(node):
             fk_node = graph.create_node(op="call_module", target=quantizer_name, args=node.args, kwargs={})
             #node.args = (quant_node,)
@@ -263,22 +311,24 @@ class TpuQuantizer(ModelQuantizer):
     def get_fake_quantizer_obj(self, modules, flattened_qconfig_dict, node):
         fake_quantizer = None
         if node.op == "call_module" and isinstance(modules[node.target], self._layers_need_scale_form_input_fake_quantizer):
-            qconfig1 = flattened_qconfig_dict.get(node.target, None) #首先根据层名去取，优先级最高
+            qconfig1 = flattened_qconfig_dict.get(node.target, None)
             if qconfig1 is None and node.target in modules:
-                qconfig1 = flattened_qconfig_dict.get(type(modules[node.target]), None) #其次根据type去取
+                qconfig1 = flattened_qconfig_dict.get(type(modules[node.target]), None)
                 if isinstance(modules[node.target], self._layers_need_check_is_dw):
                     if modules[node.target].groups > 1:
                         qconfig1 = None
             if qconfig1 is None:
-                qconfig1 = flattened_qconfig_dict.get('', None) #最后找全局qconfig，优先级最低
+                qconfig1 = flattened_qconfig_dict.get('', None)
             fake_quantizer = qconfig1.activation()
         else:
-            fake_quantizer = BF16FakeQuantize(None)
+            qconfig = flattened_qconfig_dict.get('', None)
+            fake_quantizer = self.replace_bf16_activation_quantizer(qconfig.activation, BF16FakeQuantize)
         return fake_quantizer
 
     def _insert_fake_quantize_for_act_quant_for_mix_precsion_train(
             self,
             model: GraphModule,
+            node_to_quantize_output: list,
             qconfig: Any):
         graph = model.graph
         nodes = list(model.graph.nodes)
@@ -288,22 +338,22 @@ class TpuQuantizer(ModelQuantizer):
         self.quantizer_prefix = "_input_act_fake_quantizer"
 
         def find_next_f16_and_int8_layers(node, int8_layers, f16_layers):
-            for user in node.users: #若后继有1个层或多个不同类型的层，则插入多个input量化节点  todo:多个节点，部分相同，部分不同
+            for user in node.users:
                 if user.target in modules and type(modules[user.target]) in self.exclude_module_name:
                     print(f'user:{user.name} is excluded')
                     user.replace_all_uses_with(node)
                     graph.erase_node(user)
                     del modules[user.target]
                     find_next_f16_and_int8_layers(user, int8_layers, f16_layers)
-                    continue #dropout等层前不要插入伪量化节点
+                    continue
                 if user.op == "call_module" and isinstance(modules[user.target], self._layers_need_scale_form_input_fake_quantizer):
                     int8_layers.append(user)
                 else:
                     if user.op != "output":
                         f16_layers.append(user)
 
-        for node in nodes:
-            int8_layers, f16_layers = [],[] #找到node后的多个int4后继节点和多个int8后继节点，然后这多个int8或int4后继节点共享1个输入量化节点
+        for node in [ n for n in nodes if n in node_to_quantize_output]:
+            int8_layers, f16_layers = [],[]
             find_next_f16_and_int8_layers(node, int8_layers, f16_layers)
             print(f'node:{node}, f16_layers:', f16_layers, 'int8_layers:', int8_layers)
             self._insert_fake_quantizer(model, graph, modules, flattened_qconfig_dict, node, f16_layers, True)
@@ -314,7 +364,7 @@ class TpuQuantizer(ModelQuantizer):
         nodes = list(model.graph.nodes)
         modules = dict(model.named_modules())
 
-        for node in nodes:
+        for node in [ n for n in nodes if n in node_to_quantize_output]:
             if "_fake_quantizer" in node.name or node.op == 'placeholder':
                 continue
             quantizer_name = node.name + "_post_act_fake_quantizer"
@@ -389,9 +439,7 @@ class TpuQuantizer(ModelQuantizer):
             self,
             model: GraphModule,
             qconfig: Any):
-        if 'bf16_mix_prec' in self.quant_dict and self.quant_dict['bf16_mix_prec']:
-            self._insert_fake_quantize_for_act_quant_for_mix_precsion_train(model, qconfig)
-            return model
+
         graph = model.graph
         nodes = list(model.graph.nodes)
         modules = dict(model.named_modules())
@@ -404,6 +452,10 @@ class TpuQuantizer(ModelQuantizer):
         flattened_qconfig_dict = get_flattened_qconfig_dict(qconfig)
         logger.info('node_to_quantize_output:{}'.format(node_to_quantize_output))
         logger.info('flattened_qconfig_dict:{}'.format(flattened_qconfig_dict))
+
+        if 'bf16_mix_prec' in self.quant_dict and self.quant_dict['bf16_mix_prec']:
+            self._insert_fake_quantize_for_act_quant_for_mix_precsion_train(model, node_to_quantize_output, qconfig)
+            return model
 
         int4_and_int8_mix = False
         for m in flattened_qconfig_dict:

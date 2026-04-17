@@ -26,16 +26,20 @@ class LearnableFakeQuantize(QuantizeBase):
         # Initialize the shape of per-channel 'scale' and 'zero-point' before copying values
         self.load_state_dict_hook = PerChannelLoadHook(self)
         self.log_filter = False
+        self.name = ''
 
     @torch.jit.export
     def extra_repr(self):
         return 'fake_quant_enabled={}, observer_enabled={}, ' \
                'quant_min={}, quant_max={}, dtype={}, qscheme={}, ch_axis={}, ' \
-               'scale={}, zero_point={}'.format(
+               'scale={}, zero_point={} name={}'.format(
                    self.fake_quant_enabled, self.observer_enabled,
                    self.quant_min, self.quant_max,
                    self.dtype, self.qscheme, self.ch_axis, self.scale if self.ch_axis == -1 else 'List[%s]' % str(self.scale.shape),
-                   self.zero_point if self.ch_axis == -1 else 'List')
+                   self.zero_point if self.ch_axis == -1 else 'List', self.name)
+
+    def set_name(self, name):
+        self.name = name
 
     def forward(self, X):
         x_ori = X
@@ -60,9 +64,6 @@ class LearnableFakeQuantize(QuantizeBase):
             self.scale.data.clamp_(min=self.eps.item())
 
         if self.fake_quant_enabled[0] == 1:# and (not self.only_enable_observer or self.run_fquant_time > 0):
-            # if self.run_fquant_time > 0:
-            #     print('wxc1 run_fquant_time')
-            #     self.run_fquant_time -= 1
             if is_symmetric_quant(self.qscheme):
                 self.zero_point.data.zero_()
             else:
@@ -71,6 +72,8 @@ class LearnableFakeQuantize(QuantizeBase):
             if self.is_per_channel:
                 if self.use_grad_scaling:
                     grad_factor = 1.0 / (X.numel() / X.shape[self.ch_axis] * self.quant_max) ** 0.5
+                    if self.scale.grad is None:
+                        self.scale.register_hook(lambda grad: grad * grad_factor)
                 else:
                     grad_factor = 1.0
                 if is_tracing_state():
@@ -85,6 +88,8 @@ class LearnableFakeQuantize(QuantizeBase):
             else:
                 if self.use_grad_scaling:
                     grad_factor = 1.0 / (X.numel() * self.quant_max) ** 0.5
+                    if self.scale.grad is None:
+                        self.scale.register_hook(lambda grad: grad * grad_factor)
                 else:
                     grad_factor = 1.0
                 scale, zero_point = self.scale, self.zero_point
@@ -92,7 +97,7 @@ class LearnableFakeQuantize(QuantizeBase):
                 #     scale, zero_point = 1, 0
                 X = torch._fake_quantize_learnable_per_tensor_affine(
                     x_ori.float(), scale, zero_point,
-                    self.quant_min, self.quant_max, grad_factor)
+                    self.quant_min, self.quant_max, 1.0)
                 diff = x_ori - X.to(orig_dtype)
                 if self.only_enable_observer:
                     x_ori = X + diff.detach()
